@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_audio_basics/juce_audio_basics.h>
+#include "../engine/OrganModel.h"
 #include <memory>
 #include <vector>
 
@@ -7,7 +8,6 @@ namespace orgel
 {
 class SoundFont;
 
-using Registration = std::vector<std::pair<int, int>>; // (bank, program) of SF2 presets
 
 struct ScoreNote
 {
@@ -54,6 +54,7 @@ struct ScorePart
     juce::String name;
     Registration registration; // stops the file asks for at the start
     bool drums = false;
+    bool pedalStops = false;   // the file's stops for it are pedal stops ("(ped.)", "Pedal", "Basse de" ...)
     int lowest = 127, highest = 0, count = 0;
     double meanPitch = 60;
 };

@@ -1,6 +1,7 @@
 #include "Score.h"
 #include "../engine/SoundFont.h"
 #include <map>
+#include <set>
 
 namespace orgel
 {
@@ -145,7 +146,7 @@ namespace ScoreIO
                 }
             if (prog < 0)
                 return {};
-            return { { juce::jmax (0, bank), prog } };
+            return { RegStop { juce::jmax (0, bank), prog, 0 } };
         }
     } // namespace
 
@@ -281,18 +282,30 @@ namespace ScoreIO
             if (! s.notes.empty())
                 order.push_back (&s);
 
-        auto sameNotes = [] (const Stream& a, const Stream& b) {
-            if (a.notes.size() != b.notes.size())
-                return false;
+        // Same rhythm and same notes, or the same line an octave or two away (a stop that
+        // should sound at 16' or 4' pitch, played transposed on its own channel).
+        auto offsetBetween = [] (const Stream& a, const Stream& b) -> int {
+            if (a.notes.size() != b.notes.size() || a.notes.empty())
+                return 99;
+            const int k = b.notes.front().key - a.notes.front().key;
+            if (k % 12 != 0 || std::abs (k) > 24)
+                return 99;
             for (size_t i = 0; i < a.notes.size(); ++i)
-                if (std::abs (a.notes[i].start - b.notes[i].start) > 1.0e-6 || a.notes[i].key != b.notes[i].key)
-                    return false;
-            return true;
+                if (std::abs (a.notes[i].start - b.notes[i].start) > 1.0e-6 || b.notes[i].key - a.notes[i].key != k)
+                    return 99;
+            return k;
         };
         for (auto* s : order)
             std::sort (s->notes.begin(), s->notes.end(), [] (auto& a, auto& b) {
                 return a.start != b.start ? a.start < b.start : a.key < b.key;
             });
+
+        auto outOfRange = [] (const Stream& st, int shift) {
+            int n = 0;
+            for (auto& nt : st.notes)
+                n += (nt.key + shift < 36 || nt.key + shift > 96) ? 1 : 0;
+            return n;
+        };
 
         std::vector<bool> used (order.size(), false);
         for (size_t i = 0; i < order.size(); ++i)
@@ -300,15 +313,67 @@ namespace ScoreIO
             if (used[i])
                 continue;
             std::vector<Stream*> group { order[i] };
+            std::vector<int> offsets { 0 };
             for (size_t j = i + 1; j < order.size(); ++j)
-                if (! used[j] && order[j]->channel != 9 && order[i]->channel != 9 && sameNotes (*order[i], *order[j]))
+                if (! used[j] && order[j]->channel != 9 && order[i]->channel != 9)
                 {
-                    group.push_back (order[j]);
-                    used[j] = true;
+                    const int k = offsetBetween (*order[i], *order[j]);
+                    if (k != 99)
+                    {
+                        group.push_back (order[j]);
+                        offsets.push_back (k);
+                        used[j] = true;
+                    }
                 }
 
+            // Pedal stops in this group? Then the line belongs in the pedal compass (C..g').
+            bool pedalGroup = false;
+            if (sf != nullptr)
+                for (auto* g : group)
+                    for (auto rs : programsAt (*g, g->notes.front().start))
+                    {
+                        sf->resolvePreset (rs.bank, rs.program);
+                        auto n = sf->presetName (rs.bank, rs.program);
+                        pedalGroup |= (n.containsIgnoreCase ("(ped") || n.containsIgnoreCase ("ped.") || n.containsIgnoreCase ("pedal")) || n.startsWithIgnoreCase ("Basse de") || n.containsIgnoreCase ("Contra")
+                                      || n.containsIgnoreCase ("Subbass") || n.containsIgnoreCase ("Bourdon 32")
+                                      || n.containsIgnoreCase ("Bombarde") || n.containsIgnoreCase ("Posaune");
+                    }
+            const int top = pedalGroup ? 67 : 96;
+
+            // The written pitch of the line: the octave at which the fewest notes fall outside
+            // the keyboard. Octaves no channel actually plays (a line transposed to fake a 16'
+            // stop) are only chosen if that brings a real share of the notes back in.
+            auto& base = *group.front();
+            int written = 0;
+            double bestScore = 1.0e18;
+            std::vector<int> candidates;
+            for (int o : offsets)
+                for (int m = -2; m <= 2; ++m)
+                    candidates.push_back (o + 12 * m);
+            std::sort (candidates.begin(), candidates.end());
+            candidates.erase (std::unique (candidates.begin(), candidates.end()), candidates.end());
+            for (int w : candidates)
+            {
+                int outside = 0;
+                for (auto& nt : base.notes)
+                    outside += (nt.key + w < 36 || nt.key + w > top) ? 1 : 0;
+                const bool played = std::find (offsets.begin(), offsets.end(), w) != offsets.end();
+                const double score = outside + (played ? 0.0 : juce::jmax (3.0, 0.1 * (double) base.notes.size())) + std::abs (w) * 1.0e-3;
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    written = w;
+                }
+            }
+            size_t ref = 0;
+            for (size_t g = 0; g < group.size(); ++g)
+                if (offsets[g] == written)
+                    ref = g;
+            const int lift = written - offsets[ref];
+            auto octaveOf = [&] (size_t g) { return (offsets[g] - written) / 12; };
+
             ScorePart part;
-            auto& first = *group.front();
+            auto& first = *group[ref];
             part.drums = first.channel == 9;
             const bool multiTrack = trackNames.size() > 1 && first.trackName.isNotEmpty() && first.track > 0;
             part.name = multiTrack ? first.trackName : "Kanal " + juce::String (first.channel + 1);
@@ -323,23 +388,63 @@ namespace ScoreIO
             const double firstBeat = first.notes.front().start;
             auto collect = [&] (double beat) {
                 Registration reg;
-                for (auto* g : group)
-                    for (auto bp : programsAt (*g, beat))
+                for (size_t g = 0; g < group.size(); ++g)
+                    for (auto rs : programsAt (*group[g], beat))
                     {
                         if (sf != nullptr)
-                            sf->resolvePreset (bp.first, bp.second);
-                        if (std::find (reg.begin(), reg.end(), bp) == reg.end())
-                            reg.push_back (bp);
+                            sf->resolvePreset (rs.bank, rs.program);
+                        rs.octave = octaveOf (g);
+                        if (std::find (reg.begin(), reg.end(), rs) == reg.end())
+                            reg.push_back (rs);
                     }
                 return reg;
             };
             part.registration = collect (firstBeat);
+            if (sf != nullptr)
+                for (auto& rs : part.registration)
+                {
+                    auto n = sf->presetName (rs.bank, rs.program);
+                    part.pedalStops |= (n.containsIgnoreCase ("(ped") || n.containsIgnoreCase ("ped.") || n.containsIgnoreCase ("pedal")) || n.startsWithIgnoreCase ("Basse de")
+                                       || n.containsIgnoreCase ("Contra") || n.containsIgnoreCase ("Subbass")
+                                       || n.containsIgnoreCase ("Bourdon 32") || n.containsIgnoreCase ("Bombarde")
+                                       || n.containsIgnoreCase ("Posaune");
+                }
+
+            // A line played in octaves throughout (one channel doing 16' + 8'): keep the upper
+            // note as the written line and let the stops sound an octave lower as well.
+            std::set<std::pair<double, int>> lowerOfPair; // (start, key) of notes to drop
+            {
+                std::map<double, std::vector<int>> byStart;
+                for (auto& n : first.notes)
+                    byStart[n.start].push_back (n.key);
+                int pairs = 0;
+                for (auto& [t, keys] : byStart)
+                    if (keys.size() == 2 && std::abs (keys[0] - keys[1]) == 12)
+                        ++pairs;
+                if (pairs >= 8 && pairs >= (int) (0.6 * (double) byStart.size()))
+                {
+                    for (auto& [t, keys] : byStart)
+                        if (keys.size() == 2 && std::abs (keys[0] - keys[1]) == 12)
+                            lowerOfPair.insert ({ t, juce::jmin (keys[0], keys[1]) });
+                    Registration withSub = part.registration;
+                    for (auto rs : part.registration)
+                    {
+                        rs.octave -= 1;
+                        if (std::find (withSub.begin(), withSub.end(), rs) == withSub.end())
+                            withSub.push_back (rs);
+                    }
+                    part.registration = withSub;
+                }
+            }
 
             const int partIndex = (int) score->parts.size();
             score->parts.push_back (part);
             for (auto n : first.notes)
             {
+                if (lowerOfPair.count ({ n.start, n.key }))
+                    continue;
                 n.part = partIndex;
+                n.key += lift;
                 score->notes.push_back (n);
             }
 
@@ -355,6 +460,16 @@ namespace ScoreIO
             for (double b : changeBeats)
             {
                 auto reg = collect (b);
+                if (! lowerOfPair.empty())
+                {
+                    auto base = reg;
+                    for (auto rs : base)
+                    {
+                        rs.octave -= 1;
+                        if (std::find (reg.begin(), reg.end(), rs) == reg.end())
+                            reg.push_back (rs);
+                    }
+                }
                 if (reg != last && ! reg.empty())
                 {
                     score->registrationChanges.push_back ({ b, partIndex, reg });
@@ -446,11 +561,11 @@ namespace ScoreIO
             if (! part.drums)
                 --playable;
 
-            std::vector<std::pair<int, std::pair<int, int>>> channels; // channel -> (bank, program)
+            std::vector<std::pair<int, RegStop>> channels; // channel -> stop
             if (part.drums)
-                channels.push_back ({ 10, { -1, -1 } });
+                channels.push_back ({ 10, RegStop { -1, -1, 0 } });
             else if (reg.empty())
-                channels.push_back ({ freeChannels[juce::jmin (nextChannel++, freeChannels.size() - 1)], { -1, -1 } });
+                channels.push_back ({ freeChannels[juce::jmin (nextChannel++, freeChannels.size() - 1)], RegStop { -1, -1, 0 } });
             else
                 for (size_t r = 0; r < reg.size() && r < available; ++r)
                     channels.push_back ({ freeChannels[juce::jmin (nextChannel++, freeChannels.size() - 1)], reg[r] });
@@ -459,18 +574,20 @@ namespace ScoreIO
             auto name = p < (int) partNames.size() && partNames[(size_t) p].isNotEmpty() ? partNames[(size_t) p] : part.name;
             seq.addEvent (juce::MidiMessage::textMetaEvent (3, name), 0);
             for (auto& [ch, bp] : channels)
-                if (bp.second >= 0)
+                if (bp.program >= 0)
                 {
-                    seq.addEvent (juce::MidiMessage::controllerEvent (ch, 0, bp.first), 0);
+                    seq.addEvent (juce::MidiMessage::controllerEvent (ch, 0, bp.bank), 0);
                     seq.addEvent (juce::MidiMessage::controllerEvent (ch, 32, 0), 0);
-                    seq.addEvent (juce::MidiMessage::programChange (ch, bp.second), 0);
+                    seq.addEvent (juce::MidiMessage::programChange (ch, bp.program), 0);
                 }
             for (auto& n : score.notes)
                 if (n.part == p)
                     for (auto& [ch, bp] : channels)
                     {
-                        seq.addEvent (juce::MidiMessage::noteOn (ch, n.key, (juce::uint8) juce::jlimit (1, 127, n.velocity)), tick (n.start));
-                        seq.addEvent (juce::MidiMessage::noteOff (ch, n.key), tick (n.start + n.length));
+                        // a stop an octave down is written as the line an octave down on its channel
+                        const int key = juce::jlimit (0, 127, n.key + 12 * bp.octave);
+                        seq.addEvent (juce::MidiMessage::noteOn (ch, key, (juce::uint8) juce::jlimit (1, 127, n.velocity)), tick (n.start));
+                        seq.addEvent (juce::MidiMessage::noteOff (ch, key), tick (n.start + n.length));
                     }
             seq.updateMatchedPairs();
             mf.addTrack (seq);
@@ -554,7 +671,15 @@ namespace ScoreIO
         for (int p : candidates)
         {
             auto& part = score.parts[(size_t) p];
-            const bool named = part.name.containsIgnoreCase ("pedal") || part.name.startsWithIgnoreCase ("ped.");
+            int above = 0, total = 0;
+            for (auto& n : score.notes)
+                if (n.part == p)
+                {
+                    ++total;
+                    above += n.key > 67 ? 1 : 0;
+                }
+            const bool named = part.name.containsIgnoreCase ("pedal") || part.name.startsWithIgnoreCase ("ped.")
+                               || (part.pedalStops && above <= total / 20);
             const bool lowOnly = anyHighPart && candidates.size() >= 2 && part.highest <= 67 && part.meanPitch < 52;
             if (pedalIndex >= 0 && (named || lowOnly))
                 result[(size_t) p] = pedalIndex;

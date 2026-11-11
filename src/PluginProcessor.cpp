@@ -151,6 +151,7 @@ void OrgelProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     currentSampleRate = sampleRate;
     organ.prepare (sampleRate, samplesPerBlock);
+    setLatencySamples (organ.getLatencySamples());
 }
 
 void OrgelProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)

@@ -4,6 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "OrganModel.h"
 #include "SoundFont.h"
+#include "Limiter.h"
 
 struct tsf;
 
@@ -47,7 +48,7 @@ public:
     int addManual();
     void removeDivision (int d);
     void renameDivision (int d, const juce::String& name);
-    int addStop (int d, int bank, int program, const juce::String& name, bool on = false);
+    int addStop (int d, int bank, int program, const juce::String& name, bool on = false, int octave = 0);
     void removeStop (int d, int s);
     void moveStop (int d, int s, int newIndex);
     void setStop (int d, int s, bool on);
@@ -59,7 +60,7 @@ public:
     void setMidiAssign (int d, const MidiAssign& m);
     void clearRegistration();
     // Pulls exactly the given stops (adding them to the division if missing).
-    void applyRegistration (int d, const std::vector<std::pair<int, int>>& bankPrograms);
+    void applyRegistration (int d, const Registration& stops);
 
     // registration memory ("Setzer")
     juce::String captureCombination() const;
@@ -91,6 +92,7 @@ public:
     void applyCombinationLocked (const Combination& c);
     // Is the reverb ready (impulse response loaded)? Offline rendering waits for it.
     bool isReverbReady() const;
+    int getLatencySamples() const { return limiter.getLatency(); }
     int activeVoiceCount() const;
 
     // --- state -----------------------------------------------------------------
@@ -138,7 +140,7 @@ private:
     void updateGains (int numSamples);
 
     juce::dsp::Convolution convolution { juce::dsp::Convolution::NonUniform { 1024 } };
-    juce::dsp::Limiter<float> limiter;
+    LookaheadLimiter limiter;
     juce::AudioBuffer<float> wet, send;
     bool dspPrepared = false;
     double tremPhase = 0.0;

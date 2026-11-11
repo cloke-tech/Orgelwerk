@@ -49,8 +49,9 @@ int main (int argc, char** argv)
         auto& part = piece->score->parts[(size_t) p];
         std::cout << "  part " << p << " '" << part.name << "' notes " << part.count << " range " << part.lowest << "-" << part.highest
                   << " -> " << (map[(size_t) p] >= 0 ? organ.getDivision (map[(size_t) p]).name : juce::String ("(stumm)")) << " | reg:";
-        for (auto [b, pr] : part.registration)
-            std::cout << " " << sf->presetName (b, pr) << " (" << b << ":" << pr << ")";
+        for (auto rs : part.registration)
+            std::cout << " " << sf->presetName (rs.bank, rs.program) << " (" << rs.bank << ":" << rs.program << ")"
+                      << (rs.octave != 0 ? " oct" + juce::String (rs.octave) : juce::String());
         std::cout << "\n";
 
     }
@@ -58,8 +59,8 @@ int main (int argc, char** argv)
     for (auto& e : ScoreIO::registrationTimeline (*piece->score, map))
     {
         std::cout << "  reg @ beat " << e.beat << " (" << (int) (piece->score->beatToSeconds (e.beat)) << " s) " << organ.getDivision (e.division).name << ":";
-        for (auto [b, pr] : e.registration)
-            std::cout << " " << sf->presetName (b, pr);
+        for (auto rs : e.registration)
+            std::cout << " " << sf->presetName (rs.bank, rs.program) << (rs.octave != 0 ? " oct" + juce::String (rs.octave) : juce::String());
         std::cout << "\n";
     }
     if (cmd == "export")

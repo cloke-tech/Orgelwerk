@@ -65,7 +65,7 @@ std::shared_ptr<tsf> OrganEngine::makeSynth() const
     tsf* t = soundFont ? soundFont->createInstance() : nullptr;
     if (t == nullptr)
         return {};
-    tsf_set_output (t, TSF_STEREO_INTERLEAVED, (int) sampleRate, -15.0f);
+    tsf_set_output (t, TSF_STEREO_INTERLEAVED, (int) sampleRate, -11.0f);
     // plenty of voices: running out means voices get cut off, which clicks
     tsf_set_max_voices (t, 1024);
     tsf_channel_set_volume (t, 255, 1.0f); // allocates all 256 channels up front
@@ -144,15 +144,13 @@ void OrganEngine::prepare (double sr, int maxBlockSize)
     for (auto& div : divisions)
     {
         if (div.synth != nullptr)
-            tsf_set_output (div.synth.get(), TSF_STEREO_INTERLEAVED, (int) sr, -15.0f);
+            tsf_set_output (div.synth.get(), TSF_STEREO_INTERLEAVED, (int) sr, -11.0f);
         div.delayLine.clear();
         prepareDivisionDsp (div);
     }
     juce::dsp::ProcessSpec spec { sr, (juce::uint32) juce::jmax (512, maxBlockSize), 2 };
     convolution.prepare (spec);
-    limiter.prepare (spec);
-    limiter.setThreshold (-1.0f);
-    limiter.setRelease (120.0f);
+    limiter.prepare (sr, 2);
     wet.setSize (2, juce::jmax (512, maxBlockSize));
     send.setSize (2, juce::jmax (512, maxBlockSize));
     reverbSmoothed.reset (sr, 0.05);
@@ -358,11 +356,8 @@ void OrganEngine::renderLocked (juce::AudioBuffer<float>& out, const std::vector
         for (int ch = 0; ch < out.getNumChannels(); ++ch)
             out.getWritePointer (ch)[i] *= m;
     }
-    if (dspPrepared && out.getNumChannels() <= 2)
-    {
-        juce::dsp::AudioBlock<float> block (out.getArrayOfWritePointers(), (size_t) out.getNumChannels(), (size_t) numSamples);
-        limiter.process (juce::dsp::ProcessContextReplacing<float> (block));
-    }
+    if (dspPrepared)
+        limiter.process (out, numSamples);
 }
 
 //==============================================================================
@@ -560,7 +555,19 @@ void OrganEngine::renameDivision (int d, const juce::String& name)
     sendChangeMessage();
 }
 
-int OrganEngine::addStop (int d, int bank, int program, const juce::String& name, bool on)
+static juce::String octaveSuffix (int octave)
+{
+    switch (octave)
+    {
+        case -2: return juce::String::fromUTF8 (" (2 Okt. tiefer)");
+        case -1: return " (Suboktave)";
+        case 1: return " (Superoktave)";
+        case 2: return juce::String::fromUTF8 (" (2 Okt. höher)");
+        default: return {};
+    }
+}
+
+int OrganEngine::addStop (int d, int bank, int program, const juce::String& name, bool on, int octave)
 {
     int index = -1;
     {
@@ -570,7 +577,8 @@ int OrganEngine::addStop (int d, int bank, int program, const juce::String& name
         Stop st;
         st.bank = bank;
         st.program = program;
-        st.name = name.isNotEmpty() ? name : (soundFont ? soundFont->presetName (bank, program) : juce::String (program));
+        st.octave = juce::jlimit (-3, 3, octave);
+        st.name = name.isNotEmpty() ? name : (soundFont ? soundFont->presetName (bank, program) : juce::String (program)) + octaveSuffix (st.octave);
         auto& div = divisions[(size_t) d];
         assignChannel (d, st);
         div.stops.push_back (st);
@@ -758,25 +766,25 @@ void OrganEngine::clearRegistration()
     sendChangeMessage();
 }
 
-void OrganEngine::applyRegistration (int d, const std::vector<std::pair<int, int>>& bankPrograms)
+void OrganEngine::applyRegistration (int d, const Registration& regStops)
 {
     if (d < 0 || d >= getNumDivisions())
         return;
     std::vector<int> wanted;
-    for (auto [bank, program] : bankPrograms)
+    for (auto rs : regStops)
     {
-        if (soundFont && ! soundFont->resolvePreset (bank, program))
+        if (soundFont && ! soundFont->resolvePreset (rs.bank, rs.program))
             continue;
         int found = -1;
         {
             const juce::ScopedLock sl (lock);
             auto& stops = divisions[(size_t) d].stops;
             for (int s = 0; s < (int) stops.size(); ++s)
-                if (stops[(size_t) s].bank == bank && stops[(size_t) s].program == program)
+                if (stops[(size_t) s].bank == rs.bank && stops[(size_t) s].program == rs.program && stops[(size_t) s].octave == rs.octave)
                     found = s;
         }
         if (found < 0)
-            found = addStop (d, bank, program, {});
+            found = addStop (d, rs.bank, rs.program, {}, false, rs.octave);
         if (found >= 0)
             wanted.push_back (found);
     }
@@ -928,9 +936,9 @@ void OrganEngine::reconcileKey (int target, int key)
         if (div.synth == nullptr)
             return;
         const bool active = keyActive (d, key);
-        const int sk = juce::jlimit (0, 127, key + transpose);
         for (auto& st : div.stops)
         {
+            const int sk = juce::jlimit (0, 127, key + transpose + 12 * st.octave);
             const bool want = st.on && active;
             const int ch = cisSide (sk) ? st.channel2 : st.channel;
             if (want == st.sounding[(size_t) key] || ch < 0)
@@ -959,7 +967,7 @@ void OrganEngine::reconcileStop (int d, int s)
         const bool want = st.on && keyActive (d, k);
         if (want == st.sounding[(size_t) k])
             continue;
-        const int sk = juce::jlimit (0, 127, k + transpose);
+        const int sk = juce::jlimit (0, 127, k + transpose + 12 * st.octave);
         const int ch = cisSide (sk) ? st.channel2 : st.channel;
         if (want)
             tsf_channel_note_on (div.synth.get(), ch, sk, 0.8f);
@@ -983,7 +991,7 @@ void OrganEngine::stopVoice (Division& div, Stop& st)
         for (int k = 0; k < 128; ++k)
             if (st.sounding[(size_t) k])
             {
-                const int sk = juce::jlimit (0, 127, k + transpose);
+                const int sk = juce::jlimit (0, 127, k + transpose + 12 * st.octave);
                 tsf_channel_note_off (div.synth.get(), cisSide (sk) ? st.channel2 : st.channel, sk);
             }
     st.sounding.reset();
@@ -1061,6 +1069,8 @@ std::unique_ptr<juce::XmlElement> OrganEngine::toXml() const
             s->setAttribute ("name", st.name);
             s->setAttribute ("bank", st.bank);
             s->setAttribute ("program", st.program);
+            if (st.octave != 0)
+                s->setAttribute ("octave", st.octave);
             s->setAttribute ("on", st.on);
         }
     }
@@ -1106,6 +1116,7 @@ void OrganEngine::fromXml (const juce::XmlElement& xml)
                 st.name = s->getStringAttribute ("name");
                 st.bank = s->getIntAttribute ("bank");
                 st.program = s->getIntAttribute ("program");
+                st.octave = s->getIntAttribute ("octave", 0);
                 st.on = s->getBoolAttribute ("on");
                 assignChannel (di, st);
                 divisions.back().stops.push_back (st);

@@ -16,12 +16,23 @@ enum Source : uint8_t
     srcUI = 4,     // mouse on the on-screen keyboards
 };
 
+// One stop of a registration: an SF2 preset, possibly sounding an octave lower or higher
+// (MIDI files often play a line an octave down to turn an 8' stop into a 16').
+struct RegStop
+{
+    int bank = 0, program = 0, octave = 0;
+    bool operator== (const RegStop& o) const { return bank == o.bank && program == o.program && octave == o.octave; }
+    bool operator!= (const RegStop& o) const { return ! (*this == o); }
+};
+using Registration = std::vector<RegStop>;
+
 enum class StopFamily { Principal, Flute, String, Mixture, Reed, Percussion };
 
 struct Stop
 {
     juce::String name;
     int bank = 0, program = 0;
+    int octave = 0; // sounds this many octaves above (+) or below (-) the key
     bool on = false;
 
     // runtime only: one synth channel per side of the windchest

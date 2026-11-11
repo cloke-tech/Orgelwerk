@@ -421,7 +421,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
                 const juce::ScopedLock sl (ctx.liveOrgan->getLock());
                 for (auto& st : ctx.liveOrgan->getDivision (d).stops)
                     if (st.on)
-                        r.push_back ({ st.bank, st.program });
+                        r.push_back ({ st.bank, st.program, st.octave });
             }
             regs.push_back (r);
         }

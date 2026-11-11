@@ -284,9 +284,28 @@ namespace
                 right = 0.97 * right + 0.03 * 67;
             }
         }
+        // Pedal parts doubling each other an octave apart (a 16' made from an 8' stop on another
+        // channel): write the line once, not as octaves.
+        std::vector<bool> hidden (score.notes.size(), false);
+        {
+            std::map<std::pair<int, int>, std::vector<int>> pedalAt; // (start, end) -> notes
+            for (int i = 0; i < (int) score.notes.size(); ++i)
+                if (staffOf[(size_t) i] == 2)
+                {
+                    auto& n = score.notes[(size_t) i];
+                    pedalAt[{ (int) std::round (n.start * U), (int) std::round ((n.start + n.length) * U) }].push_back (i);
+                }
+            for (auto& [t, idx] : pedalAt)
+                for (int a : idx)
+                    for (int b : idx)
+                        if (score.notes[(size_t) a].part != score.notes[(size_t) b].part
+                            && score.notes[(size_t) b].key == score.notes[(size_t) a].key - 12)
+                            hidden[(size_t) b] = true;
+        }
         std::array<std::vector<std::pair<int, int>>, 3> staffNotes; // per staff: (index into score.notes, key)
         for (int i = 0; i < (int) score.notes.size(); ++i)
-            staffNotes[(size_t) staffOf[(size_t) i]].push_back ({ i, score.notes[(size_t) i].key });
+            if (! hidden[(size_t) i])
+                staffNotes[(size_t) staffOf[(size_t) i]].push_back ({ i, score.notes[(size_t) i].key });
 
         {
             std::set<int> manuals;
