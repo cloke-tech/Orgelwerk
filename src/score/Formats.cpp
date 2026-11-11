@@ -1,4 +1,5 @@
 #include "Formats.h"
+#include <set>
 #include "NotationBuilder.h"
 #include "Player.h"
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -309,6 +310,17 @@ bool renderAudio (const ExportContext& ctx, juce::AudioFormatWriter& writer, juc
         markCombos.push_back (organ.parseCombination (combo));
     }
     player.setMarkTimes (markTimes);
+    std::vector<double> timelineTimes;
+    for (auto& tr : ctx.registrationTimeline)
+        timelineTimes.push_back (ctx.piece->score->beatToSeconds (tr.beat));
+    player.setTimelineTimes (timelineTimes);
+    // registration at the start: the first entry of every division
+    {
+        std::set<int> done;
+        for (auto& tr : ctx.registrationTimeline)
+            if (done.insert (tr.division).second)
+                organ.applyRegistration (tr.division, tr.registration);
+    }
     // the registration in effect at the start of the piece
     for (size_t i = 0; i < markTimes.size(); ++i)
         if (markTimes[i] <= 0.0)
@@ -336,9 +348,8 @@ bool renderAudio (const ExportContext& ctx, juce::AudioFormatWriter& writer, juc
                     organ.applyCombinationLocked (markCombos[(size_t) (-r - 2)]);
                 continue;
             }
-            auto& rc = ctx.piece->score->registrationChanges[(size_t) r];
-            if (rc.part < (int) ctx.partDivision.size() && ctx.partDivision[(size_t) rc.part] >= 0)
-                organ.applyRegistration (ctx.partDivision[(size_t) rc.part], rc.registration);
+            if (r < (int) ctx.registrationTimeline.size())
+                organ.applyRegistration (ctx.registrationTimeline[(size_t) r].division, ctx.registrationTimeline[(size_t) r].registration);
         }
         std::stable_sort (events.begin(), events.end(), [] (auto& a, auto& b) { return a.sample < b.sample; });
         {
@@ -353,6 +364,11 @@ bool renderAudio (const ExportContext& ctx, juce::AudioFormatWriter& writer, juc
             return false;
         }
         rendered += block / ctx.sampleRate;
+        if (ctx.voiceStats != nullptr)
+        {
+            auto& slot = (*ctx.voiceStats)[(size_t) juce::jlimit (0, (int) ctx.voiceStats->size() - 1, (int) (rendered / 30.0))];
+            slot = juce::jmax (slot, organ.activeVoiceCount());
+        }
         if (ctx.progress && ! ctx.progress ((float) juce::jmin (1.0, rendered / total)))
         {
             error = "Abgebrochen.";

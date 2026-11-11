@@ -203,6 +203,15 @@ void OrganEngine::buildImpulseResponse()
                                      juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::yes);
 }
 
+int OrganEngine::activeVoiceCount() const
+{
+    int n = 0;
+    for (auto& d : divisions)
+        if (d.synth != nullptr)
+            n += tsf_active_voice_count (d.synth.get());
+    return n;
+}
+
 bool OrganEngine::isReverbReady() const
 {
     return const_cast<juce::dsp::Convolution&> (convolution).getCurrentIRSize() > 0;

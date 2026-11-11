@@ -22,6 +22,8 @@ public:
     void setPartDivision (std::vector<int> partToDivision) { partDivision = std::move (partToDivision); }
     // registration marks (seconds); reported as -(index + 2) in registrationChanges
     void setMarkTimes (std::vector<double> times) { markTimes = std::move (times); }
+    // the file's registration timeline (seconds); reported as the timeline index (>= 0)
+    void setTimelineTimes (std::vector<double> times) { timelineTimes = std::move (times); }
     const std::vector<int>& getPartDivision() const { return partDivision; }
 
     // Collects the key events that fall into the next block. Registration changes found
@@ -45,7 +47,7 @@ private:
     std::shared_ptr<const Score> score;
     std::vector<int> partDivision;
     std::vector<Event> events;
-    std::vector<double> markTimes;
+    std::vector<double> markTimes, timelineTimes;
     size_t next = 0;
     std::atomic<double> position { 0.0 };
     double length = 0;

@@ -19,6 +19,9 @@ int main (int argc, char** argv)
     const juce::String cmd (argv[1]);
     const juce::File input = juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]);
 
+    for (int i = 1; i < argc; ++i)
+        if (juce::String (argv[i]) == "--bank0")
+            SoundFont::fallbackToBankZero = true;
     auto sf = SoundFont::loadBuiltIn();
     OrganEngine organ;
     organ.setSoundFont (sf);
@@ -49,10 +52,16 @@ int main (int argc, char** argv)
         for (auto [b, pr] : part.registration)
             std::cout << " " << sf->presetName (b, pr) << " (" << b << ":" << pr << ")";
         std::cout << "\n";
-        if (map[(size_t) p] >= 0 && ! part.registration.empty())
-            organ.applyRegistration (map[(size_t) p], part.registration);
+
     }
 
+    for (auto& e : ScoreIO::registrationTimeline (*piece->score, map))
+    {
+        std::cout << "  reg @ beat " << e.beat << " (" << (int) (piece->score->beatToSeconds (e.beat)) << " s) " << organ.getDivision (e.division).name << ":";
+        for (auto [b, pr] : e.registration)
+            std::cout << " " << sf->presetName (b, pr);
+        std::cout << "\n";
+    }
     if (cmd == "export")
     {
         Formats::ExportContext ctx;
@@ -62,8 +71,19 @@ int main (int argc, char** argv)
             ctx.partIsPedal.push_back (d >= 0 && d == organ.pedalIndex());
         ctx.liveOrgan = &organ;
         ctx.sampleRate = 44100;
+        ctx.registrationTimeline = ScoreIO::registrationTimeline (*piece->score, map);
+        std::vector<int> voices (64, 0);
+        ctx.voiceStats = &voices;
         for (int i = 3; i < argc; ++i)
         {
+            // --flat: no placement in the room (for comparing with other renderers)
+            if (juce::String (argv[i]) == "--bank0")
+                continue;
+            if (juce::String (argv[i]) == "--flat")
+            {
+                organ.setSpatial (false);
+                continue;
+            }
             // --mark <seconds> <combination>: registration track entry, e.g. --mark 10 "0:1,0:4;"
             if (juce::String (argv[i]) == "--mark" && i + 2 < argc)
             {
@@ -83,6 +103,14 @@ int main (int argc, char** argv)
                     const bool ok = Formats::exportTo (f, target, ctx, err);
                     std::cout << "  export " << target.getFileName() << ": " << (ok ? "ok" : ("FAILED " + err)) << " ("
                               << (int) (juce::Time::getMillisecondCounterHiRes() - t1) << " ms)\n";
+                    if (f.isAudio)
+                    {
+                        std::cout << "  most voices per 30 s:";
+                        for (int v : voices)
+                            if (v > 0) std::cout << " " << v;
+                        std::cout << "\n";
+                        std::fill (voices.begin(), voices.end(), 0);
+                    }
                 }
             if (! found)
                 std::cout << "  unknown export extension " << ext << "\n";

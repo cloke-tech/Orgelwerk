@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <set>
+#include <map>
 
 namespace orgel
 {
@@ -266,6 +267,7 @@ void OrgelProcessor::timerCallback()
                 partDivision = map;
                 player.setPartDivision (map);
             }
+            compileTimeline();
             reengrave();
             sendChangeMessage();
         }
@@ -283,12 +285,8 @@ void OrgelProcessor::timerCallback()
     // registration changes written in the score (program changes during the piece)
     const auto scope = regFifo.read (regFifo.getNumReady());
     auto apply = [this] (int r) {
-        auto p = getPiece();
-        if (p == nullptr || p->score == nullptr || r >= (int) p->score->registrationChanges.size())
-            return;
-        auto& rc = p->score->registrationChanges[(size_t) r];
-        if (applyFileRegistration && rc.part < (int) partDivision.size() && partDivision[(size_t) rc.part] >= 0)
-            organ.applyRegistration (partDivision[(size_t) rc.part], rc.registration);
+        if (applyFileRegistration && r < (int) timeline.size())
+            organ.applyRegistration (timeline[(size_t) r].division, timeline[(size_t) r].registration);
     };
     for (int i = 0; i < scope.blockSize1; ++i) apply (regBuffer[(size_t) (scope.startIndex1 + i)]);
     for (int i = 0; i < scope.blockSize2; ++i) apply (regBuffer[(size_t) (scope.startIndex2 + i)]);
@@ -387,6 +385,7 @@ void OrgelProcessor::setPiece (std::shared_ptr<Piece> p)
             marks.clear();
     }
     compileMarks();
+    compileTimeline();
     if (applyFileRegistration)
         applyPieceRegistration();
     sendChangeMessage();
@@ -394,25 +393,36 @@ void OrgelProcessor::setPiece (std::shared_ptr<Piece> p)
 
 void OrgelProcessor::applyPieceRegistration()
 {
+    applyFileRegistrationAt (getCurrentBeat());
+}
+
+void OrgelProcessor::compileTimeline()
+{
     auto p = getPiece();
-    if (p == nullptr)
-        return;
-    std::set<int> touched;
-    for (int part = 0; part < (int) p->score->parts.size(); ++part)
+    std::vector<DivisionRegistration> t;
+    std::vector<double> times;
+    if (p != nullptr && p->score != nullptr)
     {
-        const int d = part < (int) partDivision.size() ? partDivision[(size_t) part] : -1;
-        auto& reg = p->score->parts[(size_t) part].registration;
-        if (d < 0 || reg.empty())
-            continue;
-        // two parts on one division: combine their stops
-        Registration combined = reg;
-        if (touched.count (d))
-            for (int s = 0; s < (int) organ.getDivision (d).stops.size(); ++s)
-                if (organ.getDivision (d).stops[(size_t) s].on)
-                    combined.push_back ({ organ.getDivision (d).stops[(size_t) s].bank, organ.getDivision (d).stops[(size_t) s].program });
-        organ.applyRegistration (d, combined);
-        touched.insert (d);
+        t = ScoreIO::registrationTimeline (*p->score, partDivision);
+        for (auto& e : t)
+            times.push_back (p->score->beatToSeconds (e.beat));
     }
+    const juce::ScopedLock sl (organ.getLock());
+    timeline = std::move (t);
+    player.setTimelineTimes (std::move (times));
+}
+
+// The registration the file asks for at this point: per division the last change before it
+// (or the first one, before anything has been played on that division).
+void OrgelProcessor::applyFileRegistrationAt (double beat)
+{
+    std::map<int, Registration> regs;
+    for (auto& e : timeline)
+        if (e.beat <= beat + 1.0e-6 || ! regs.count (e.division))
+            regs[e.division] = e.registration;
+    for (auto& [d, reg] : regs)
+        if (d < organ.getNumDivisions())
+            organ.applyRegistration (d, reg);
 }
 
 void OrgelProcessor::setPartDivision (int part, int division)
@@ -425,6 +435,7 @@ void OrgelProcessor::setPartDivision (int part, int division)
         partDivision[(size_t) part] = division;
         player.setPartDivision (partDivision);
     }
+    compileTimeline();
     reengrave();
     sendChangeMessage();
 }
@@ -555,6 +566,8 @@ void OrgelProcessor::applyMarkAtPosition()
 
 void OrgelProcessor::play()
 {
+    if (applyFileRegistration)
+        applyFileRegistrationAt (getCurrentBeat());
     applyMarkAtPosition();
     const juce::ScopedLock sl (organ.getLock());
     if (player.hasScore())
@@ -581,6 +594,8 @@ void OrgelProcessor::seek (double seconds)
         const juce::ScopedLock sl (organ.getLock());
         player.seek (seconds);
     }
+    if (applyFileRegistration)
+        applyFileRegistrationAt (getCurrentBeat());
     applyMarkAtPosition();
 }
 
@@ -602,6 +617,8 @@ Formats::ExportContext OrgelProcessor::makeExportContext() const
     ctx.liveOrgan = const_cast<OrganEngine*> (&organ);
     ctx.sampleRate = getSampleRateForExport();
     ctx.speed = player.speed.load();
+    if (applyFileRegistration)
+        ctx.registrationTimeline = timeline;
     if (auto p = getPiece())
         for (auto& m : getMarks())
             ctx.registrationMarks.push_back ({ p->score->beatToSeconds (m.beat), m.combination });

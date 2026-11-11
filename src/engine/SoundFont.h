@@ -32,6 +32,8 @@ public:
     // Files made for the Jeux SoundFont often address it at banks 42/43; map such
     // bank numbers back to what this file actually contains.
     bool resolvePreset (int& bank, int program) const;
+    // test switch: behave like players that drop unknown banks to bank 0 (FluidSynth style)
+    static inline bool fallbackToBankZero = false;
 
     juce::String getName() const { return name; }
     juce::File getFile() const { return file; } // empty for the built-in font

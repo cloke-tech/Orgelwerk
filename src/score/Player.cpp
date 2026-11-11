@@ -24,12 +24,7 @@ void Player::setScore (std::shared_ptr<const Score> s, std::vector<int> map)
         events.push_back ({ t1, n.part, n.key, false, -1 });
         length = juce::jmax (length, t1);
     }
-    for (int i = 0; i < (int) score->registrationChanges.size(); ++i)
-    {
-        auto& rc = score->registrationChanges[(size_t) i];
-        // just before the notes of that beat
-        events.push_back ({ score->beatToSeconds (rc.beat) - 0.0005, rc.part, 0, false, i });
-    }
+
     std::stable_sort (events.begin(), events.end(), [] (const Event& a, const Event& b) {
         if (a.time != b.time) return a.time < b.time;
         return ! a.on && b.on; // releases first
@@ -56,6 +51,10 @@ void Player::process (int numSamples, double sampleRate, std::vector<KeyEvent>& 
     const double start = position.load();
     const double end = start + numSamples / sampleRate * spd;
 
+    // registration changes a moment before the notes they belong to
+    for (size_t t = 0; t < timelineTimes.size(); ++t)
+        if (timelineTimes[t] - 0.002 >= start && timelineTimes[t] - 0.002 < end)
+            registrationChanges.push_back ((int) t);
     for (size_t m = 0; m < markTimes.size(); ++m)
         if (markTimes[m] >= start && markTimes[m] < end)
             registrationChanges.push_back (-(int) m - 2);

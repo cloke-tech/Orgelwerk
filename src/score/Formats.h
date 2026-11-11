@@ -54,7 +54,10 @@ namespace Formats
         float speed = 1.0f;
         // registration track: (seconds, combination as captured by OrganEngine)
         std::vector<std::pair<double, juce::String>> registrationMarks;
+        // the file's registration over time (empty: keep the organ as it is)
+        std::vector<DivisionRegistration> registrationTimeline;
         std::function<bool (float)> progress; // return false to cancel
+        std::vector<int>* voiceStats = nullptr; // optional: most voices per 30 s (tests)
     };
     bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportContext& ctx, juce::String& error);
 

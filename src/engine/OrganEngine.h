@@ -91,6 +91,7 @@ public:
     void applyCombinationLocked (const Combination& c);
     // Is the reverb ready (impulse response loaded)? Offline rendering waits for it.
     bool isReverbReady() const;
+    int activeVoiceCount() const;
 
     // --- state -----------------------------------------------------------------
     std::unique_ptr<juce::XmlElement> toXml() const;

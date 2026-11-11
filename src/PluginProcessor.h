@@ -174,6 +174,9 @@ private:
     std::vector<RegistrationMark> marks;
     std::vector<OrganEngine::Combination> markCombos; // parsed for the audio thread
     void compileMarks();
+    std::vector<DivisionRegistration> timeline; // the file's registration over time
+    void compileTimeline();
+    void applyFileRegistrationAt (double beat);
     int knownDivisions = -1;
     std::shared_ptr<int> alive = std::make_shared<int> (0); // async callbacks check this
     juce::StringArray restorePartMap;

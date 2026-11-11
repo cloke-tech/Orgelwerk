@@ -693,9 +693,41 @@ juce::String toMusicXML (const Score& score, const Options& opt)
     o << "  </part-list>\n";
 
     const int numParts = q.hasPedal ? 2 : 1;
-    std::array<int, 16> lastManual; // per staff and voice
-    lastManual.fill (-1);
-    std::vector<std::tuple<int, int, int, int>> labelled; // measure, staff, division, position
+    // Where a hand changes manual: walk each manual staff in time order (all voices together)
+    // and mark the places where the manual differs from what that staff played just before,
+    // unless the old manual is still sounding there (two manuals at once need no label).
+    std::set<std::tuple<int, int, int>> labelAt; // measure, staff, position
+    if (q.manualsUsed > 1)
+        for (int k = 0; k < (int) q.staves.size(); ++k)
+        {
+            if (q.staves[(size_t) k].part != 0)
+                continue;
+            auto& st = q.staves[(size_t) k];
+            int current = -1;
+            for (int mi = 0; mi < (int) q.measures.size(); ++mi)
+            {
+                std::vector<const QEvent*> evs;
+                for (auto& voice : st.voices)
+                    for (auto& e : voice[(size_t) mi])
+                        if (! e.rest && ! e.notes.empty() && ! e.notes.front().tieStop)
+                            evs.push_back (&e);
+                std::stable_sort (evs.begin(), evs.end(), [] (auto* a, auto* b) { return a->start < b->start; });
+                for (auto* e : evs)
+                {
+                    const int dv = e->notes.front().division;
+                    if (dv < 0 || dv == current)
+                        continue;
+                    bool oldStillSounding = false;
+                    for (auto* o : evs)
+                        oldStillSounding |= o != e && o->notes.front().division == current && o->start < e->start + e->dur
+                                            && o->start + o->dur > e->start;
+                    if (! oldStillSounding)
+                        labelAt.insert ({ mi, k, e->start });
+                    current = dv;
+                }
+            }
+        }
+    std::set<std::tuple<int, int, int>> labelled;
     for (int part = 0; part < numParts; ++part)
     {
         std::vector<int> staffIdx;
@@ -761,23 +793,14 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                             juce::ignoreUnused (isChordMember);
                             o << "<duration>" << e.dur << "</duration>";
                         };
-                        // a hand moves to another manual: say so above the staff, as organ editions do
-                        if (! e.rest && part == 0 && q.manualsUsed > 1 && ! e.notes.empty() && e.notes.front().division >= 0
-                            && e.notes.front().division != lastManual[(size_t) (k * 4 + v)] && ! e.notes.front().tieStop)
+                        // a hand moves to another manual: say so at the staff, as organ editions do
+                        if (! e.rest && part == 0 && ! e.notes.empty() && labelAt.count ({ mi, k, e.start })
+                            && labelled.insert ({ mi, k, e.start }).second)
                         {
                             const int dv = e.notes.front().division;
-                            // one label per staff and change, even if several voices switch together
-                            bool nearby = false;
-                            for (auto& [lm, lk, ld, lp] : labelled)
-                                nearby |= lm == mi && lk == k && ld == dv && std::abs (lp - e.start) <= 2 * U;
-                            if (! nearby)
-                            {
-                                labelled.push_back ({ mi, k, dv, e.start });
-                                auto label = dv < (int) opt.divisionLabels.size() ? opt.divisionLabels[(size_t) dv] : "Man. " + romanNumeral (dv + 1);
-                                o << "      <direction placement=\"" << (k == 0 ? "above" : "below") << "\"><direction-type><words font-weight=\"bold\" color=\""
-                                  << manualColour (dv) << "\">" << esc (label) << "</words></direction-type><staff>" << (k + 1) << "</staff></direction>\n";
-                            }
-                            lastManual[(size_t) (k * 4 + v)] = dv;
+                            auto label = dv < (int) opt.divisionLabels.size() ? opt.divisionLabels[(size_t) dv] : "Man. " + romanNumeral (dv + 1);
+                            o << "      <direction placement=\"" << (k == 0 ? "above" : "below") << "\"><direction-type><words font-weight=\"bold\" color=\""
+                              << manualColour (dv) << "\">" << esc (label) << "</words></direction-type><staff>" << (k + 1) << "</staff></direction>\n";
                         }
                         if (e.rest)
                         {

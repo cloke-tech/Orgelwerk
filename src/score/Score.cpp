@@ -486,58 +486,180 @@ namespace ScoreIO
         return out.openedOk() && mf.writeTo (out, 1);
     }
 
+    namespace
+    {
+        using Segments = std::vector<std::pair<double, double>>;
+
+        // stretches in which a part plays: a rest of more than two bars ends a stretch
+        Segments segmentsOf (const Score& score, int part)
+        {
+            Segments segs;
+            for (auto& n : score.notes)
+            {
+                if (n.part != part)
+                    continue;
+                if (segs.empty() || n.start > segs.back().second + 8.0)
+                    segs.push_back ({ n.start, n.start + n.length });
+                else
+                    segs.back().second = juce::jmax (segs.back().second, n.start + n.length);
+            }
+            return segs;
+        }
+
+        double overlap (const Segments& a, const Segments& b)
+        {
+            double total = 0;
+            for (auto& x : a)
+                for (auto& y : b)
+                    total += juce::jmax (0.0, juce::jmin (x.second, y.second) - juce::jmax (x.first, y.first));
+            return total;
+        }
+
+        // one part takes over from the other within a beat: no time to change stops
+        bool answersQuickly (const Segments& a, const Segments& b)
+        {
+            for (auto& x : a)
+                for (auto& y : b)
+                    if (std::abs (x.first - y.second) < 2.0 || std::abs (y.first - x.second) < 2.0)
+                        return true;
+            return false;
+        }
+
+        Registration registrationAt (const Score& score, int part, double beat)
+        {
+            Registration reg = score.parts[(size_t) part].registration;
+            for (auto& rc : score.registrationChanges)
+                if (rc.part == part && rc.beat <= beat + 1.0e-6)
+                    reg = rc.registration;
+            return reg;
+        }
+    } // namespace
+
     std::vector<int> autoAssign (const Score& score, int numManuals, int pedalIndex)
     {
-        std::vector<int> result (score.parts.size(), -1);
+        const int numParts = (int) score.parts.size();
+        std::vector<int> result ((size_t) numParts, -1);
         std::vector<int> candidates;
-        for (int p = 0; p < (int) score.parts.size(); ++p)
+        for (int p = 0; p < numParts; ++p)
             if (! score.parts[(size_t) p].drums && score.parts[(size_t) p].count > 0)
                 candidates.push_back (p);
         if (candidates.empty() || numManuals <= 0)
             return result;
 
-        // parts named "Pedal" (e.g. from MusicXML/MEI organ scores) go to the pedal
-        if (pedalIndex >= 0)
-            for (int p : candidates)
-                if (score.parts[(size_t) p].name.containsIgnoreCase ("pedal") || score.parts[(size_t) p].name.startsWithIgnoreCase ("ped."))
-                    result[(size_t) p] = pedalIndex;
-
-        int pedalPart = -1;
-        bool namedPedal = false;
-        for (int r : result)
-            namedPedal |= r == pedalIndex && r >= 0;
-        if (! namedPedal && candidates.size() >= 2 && pedalIndex >= 0)
-        {
-            for (int p : candidates)
-            {
-                auto& part = score.parts[(size_t) p];
-                if (part.highest <= 67 && part.meanPitch < 52
-                    && (pedalPart < 0 || part.meanPitch < score.parts[(size_t) pedalPart].meanPitch))
-                    pedalPart = p;
-            }
-        }
-        if (pedalPart >= 0)
-            result[(size_t) pedalPart] = pedalIndex;
-
-        // the remaining parts go to the manuals, the busiest to manual I. Staves of one
-        // instrument (same name: right and left hand) share a manual.
+        // pedal: named so, or a part that stays in the pedal range (several parts may be pedal)
+        bool anyHighPart = false;
+        for (int p : candidates)
+            anyHighPart |= score.parts[(size_t) p].highest > 67;
         std::vector<int> manualParts;
         for (int p : candidates)
-            if (p != pedalPart && result[(size_t) p] < 0)
+        {
+            auto& part = score.parts[(size_t) p];
+            const bool named = part.name.containsIgnoreCase ("pedal") || part.name.startsWithIgnoreCase ("ped.");
+            const bool lowOnly = anyHighPart && candidates.size() >= 2 && part.highest <= 67 && part.meanPitch < 52;
+            if (pedalIndex >= 0 && (named || lowOnly))
+                result[(size_t) p] = pedalIndex;
+            else
                 manualParts.push_back (p);
-        std::map<juce::String, int> countByName;
+        }
+
+        // manuals: the busiest part on manual I; parts that sound together or answer each other
+        // closely go to different manuals; parts with other stops prefer a manual of their own
+        std::stable_sort (manualParts.begin(), manualParts.end(), [&] (int a, int b) {
+            return score.parts[(size_t) a].count > score.parts[(size_t) b].count;
+        });
+        std::vector<Segments> segs ((size_t) numParts);
         for (int p : manualParts)
-            countByName[score.parts[(size_t) p].name] += score.parts[(size_t) p].count;
-        std::vector<juce::String> names;
-        for (auto& [n, c] : countByName)
-            names.push_back (n);
-        std::stable_sort (names.begin(), names.end(), [&] (auto& a, auto& b) { return countByName[a] > countByName[b]; });
+            segs[(size_t) p] = segmentsOf (score, p);
+        std::vector<std::vector<int>> onManual ((size_t) numManuals);
         for (int p : manualParts)
         {
-            const int rank = (int) (std::find (names.begin(), names.end(), score.parts[(size_t) p].name) - names.begin());
-            result[(size_t) p] = rank % numManuals;
+            int best = 0;
+            double bestCost = 1.0e18;
+            for (int m = 0; m < numManuals; ++m)
+            {
+                double cost = m * 0.01;
+                for (int q : onManual[(size_t) m])
+                {
+                    // staves of one instrument (same name, e.g. right and left hand) belong together
+                    if (score.parts[(size_t) q].name == score.parts[(size_t) p].name && ! score.parts[(size_t) p].name.startsWith ("Kan"))
+                    {
+                        cost -= 50.0;
+                        continue;
+                    }
+                    cost += 100.0 * overlap (segs[(size_t) p], segs[(size_t) q]) / juce::jmax (1.0, (double) score.parts[(size_t) p].count);
+                    // answering within a beat with other stops (echo effects): impossible on one manual.
+                    // Between movements or after a rest the organist can simply change the stops.
+                    if (answersQuickly (segs[(size_t) p], segs[(size_t) q])
+                        && score.parts[(size_t) q].registration != score.parts[(size_t) p].registration)
+                        cost += 5.0;
+                }
+                if (cost < bestCost)
+                {
+                    bestCost = cost;
+                    best = m;
+                }
+            }
+            result[(size_t) p] = best;
+            onManual[(size_t) best].push_back (p);
         }
         return result;
+    }
+
+    std::vector<DivisionRegistration> registrationTimeline (const Score& score, const std::vector<int>& partDivision)
+    {
+        std::vector<DivisionRegistration> timeline;
+        const int numParts = (int) score.parts.size();
+        std::map<int, std::vector<int>> partsOn;
+        std::vector<Segments> segs ((size_t) numParts);
+        for (int p = 0; p < numParts && p < (int) partDivision.size(); ++p)
+            if (partDivision[(size_t) p] >= 0 && ! score.parts[(size_t) p].registration.empty())
+            {
+                partsOn[partDivision[(size_t) p]].push_back (p);
+                segs[(size_t) p] = segmentsOf (score, p);
+            }
+
+        for (auto& [division, parts] : partsOn)
+        {
+            // moments at which something may change: a part starts playing, or the file changes its stops
+            std::vector<double> moments;
+            for (int p : parts)
+            {
+                for (auto& sg : segs[(size_t) p])
+                    moments.push_back (sg.first);
+                for (auto& rc : score.registrationChanges)
+                    if (rc.part == p)
+                        moments.push_back (rc.beat);
+            }
+            std::sort (moments.begin(), moments.end());
+            moments.erase (std::unique (moments.begin(), moments.end(), [] (double a, double b) { return std::abs (a - b) < 1.0e-6; }), moments.end());
+
+            Registration last;
+            for (double t : moments)
+            {
+                Registration reg;
+                auto addFrom = [&] (int p) {
+                    for (auto bp : registrationAt (score, p, t))
+                        if (std::find (reg.begin(), reg.end(), bp) == reg.end())
+                            reg.push_back (bp);
+                };
+                for (int p : parts)
+                    for (auto& sg : segs[(size_t) p])
+                        if (sg.first <= t + 1.0 && sg.second > t)
+                        {
+                            addFrom (p);
+                            break;
+                        }
+                if (reg.empty())
+                    continue;
+                if (reg != last)
+                {
+                    timeline.push_back ({ t, division, reg });
+                    last = reg;
+                }
+            }
+        }
+        std::stable_sort (timeline.begin(), timeline.end(), [] (auto& a, auto& b) { return a.beat < b.beat; });
+        return timeline;
     }
 } // namespace ScoreIO
 } // namespace orgel

@@ -41,6 +41,14 @@ struct RegistrationChange
     Registration registration;
 };
 
+// The stops a division should have from a beat on (derived from the parts that play on it).
+struct DivisionRegistration
+{
+    double beat = 0;
+    int division = 0;
+    Registration registration;
+};
+
 struct ScorePart
 {
     juce::String name;
@@ -85,7 +93,12 @@ namespace ScoreIO
     bool saveMidiFile (const Score& score, const juce::File& f, const std::vector<juce::String>& partNames = {},
                        const std::vector<Registration>& registrations = {});
 
-    // Which organ division each part should play on: pedal for the low part, manuals for the rest.
+    // Which organ division each part should play on: low parts on the pedal, the others on
+    // manuals so that parts sounding together (or answering each other) get different manuals.
     std::vector<int> autoAssign (const Score& score, int numManuals, int pedalIndex);
+
+    // When parts share a division, its registration changes as they take turns: the file's
+    // registration of whichever part plays there (merged if several play at once).
+    std::vector<DivisionRegistration> registrationTimeline (const Score& score, const std::vector<int>& partDivision);
 } // namespace ScoreIO
 } // namespace orgel
