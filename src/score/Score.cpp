@@ -1,0 +1,543 @@
+#include "Score.h"
+#include "../engine/SoundFont.h"
+#include <map>
+
+namespace orgel
+{
+void Score::finalise()
+{
+    std::sort (notes.begin(), notes.end(), [] (const ScoreNote& a, const ScoreNote& b) {
+        if (a.start != b.start) return a.start < b.start;
+        if (a.part != b.part) return a.part < b.part;
+        return a.key > b.key;
+    });
+    std::stable_sort (tempos.begin(), tempos.end(), [] (auto& a, auto& b) { return a.beat < b.beat; });
+    std::stable_sort (timeSigs.begin(), timeSigs.end(), [] (auto& a, auto& b) { return a.beat < b.beat; });
+    std::stable_sort (keySigs.begin(), keySigs.end(), [] (auto& a, auto& b) { return a.beat < b.beat; });
+    std::stable_sort (registrationChanges.begin(), registrationChanges.end(), [] (auto& a, auto& b) { return a.beat < b.beat; });
+
+    if (tempos.empty() || tempos.front().beat > 0)
+        tempos.insert (tempos.begin(), TempoChange { 0, tempos.empty() ? 120.0 : tempos.front().bpm });
+    if (timeSigs.empty() || timeSigs.front().beat > 0)
+        timeSigs.insert (timeSigs.begin(), TimeSignature {});
+    if (keySigs.empty() || keySigs.front().beat > 0)
+        keySigs.insert (keySigs.begin(), KeySignature {});
+
+    for (auto& p : parts)
+    {
+        p.lowest = 127;
+        p.highest = 0;
+        p.count = 0;
+        p.meanPitch = 0;
+    }
+    for (auto& n : notes)
+    {
+        if (n.part < 0 || n.part >= (int) parts.size())
+            continue;
+        auto& p = parts[(size_t) n.part];
+        p.lowest = juce::jmin (p.lowest, n.key);
+        p.highest = juce::jmax (p.highest, n.key);
+        p.count++;
+        p.meanPitch += n.key;
+    }
+    for (auto& p : parts)
+        p.meanPitch = p.count > 0 ? p.meanPitch / p.count : 60.0;
+}
+
+double Score::lengthBeats() const
+{
+    double end = 0;
+    for (auto& n : notes)
+        end = juce::jmax (end, n.start + n.length);
+    return end;
+}
+
+double Score::beatToSeconds (double beat) const
+{
+    double t = 0, b = 0, bpm = tempos.empty() ? 120.0 : tempos.front().bpm;
+    for (auto& tc : tempos)
+    {
+        if (tc.beat >= beat)
+            break;
+        t += (tc.beat - b) * 60.0 / bpm;
+        b = tc.beat;
+        bpm = tc.bpm;
+    }
+    return t + (beat - b) * 60.0 / bpm;
+}
+
+double Score::secondsToBeat (double seconds) const
+{
+    double t = 0, b = 0, bpm = tempos.empty() ? 120.0 : tempos.front().bpm;
+    for (auto& tc : tempos)
+    {
+        const double tNext = t + (tc.beat - b) * 60.0 / bpm;
+        if (tNext >= seconds)
+            break;
+        t = tNext;
+        b = tc.beat;
+        bpm = tc.bpm;
+    }
+    return b + (seconds - t) * bpm / 60.0;
+}
+
+TimeSignature Score::timeSigAt (double beat) const
+{
+    TimeSignature r;
+    for (auto& ts : timeSigs)
+        if (ts.beat <= beat + 1.0e-6)
+            r = ts;
+    return r;
+}
+
+KeySignature Score::keySigAt (double beat) const
+{
+    KeySignature r;
+    for (auto& ks : keySigs)
+        if (ks.beat <= beat + 1.0e-6)
+            r = ks;
+    return r;
+}
+
+int Score::measureAt (double beat) const
+{
+    int measure = 1;
+    double pos = 0;
+    for (size_t i = 0; i < timeSigs.size() || i == 0; ++i)
+    {
+        const TimeSignature ts = timeSigs.empty() ? TimeSignature {} : timeSigs[i];
+        const double len = juce::jmax (0.25, ts.num * 4.0 / juce::jmax (1, ts.den));
+        const double end = i + 1 < timeSigs.size() ? timeSigs[i + 1].beat : 1.0e12;
+        while (pos + len <= beat + 1.0e-6 && pos + len <= end + 1.0e-6)
+        {
+            pos += len;
+            ++measure;
+        }
+        if (beat < end)
+            break;
+        pos = end;
+    }
+    return measure;
+}
+
+//==============================================================================
+namespace ScoreIO
+{
+    namespace
+    {
+        struct Stream
+        {
+            int track = 0, channel = 0;
+            std::vector<ScoreNote> notes;
+            // program state over time: (beat, bank, program)
+            std::vector<std::tuple<double, int, int>> programs;
+            juce::String trackName;
+        };
+
+        Registration programsAt (const Stream& s, double beat)
+        {
+            int bank = -1, prog = -1;
+            for (auto& [b, bk, pr] : s.programs)
+                if (b <= beat + 1.0e-6)
+                {
+                    bank = bk;
+                    prog = pr;
+                }
+            if (prog < 0)
+                return {};
+            return { { juce::jmax (0, bank), prog } };
+        }
+    } // namespace
+
+    // Many MIDI files declare C major (or nothing) whatever the piece is in. If the notes
+    // clearly suggest another key, use that for spelling and the key signature.
+    void estimateKeyIfMissing (Score& score)
+    {
+        if (score.keySigs.size() > 1 || (! score.keySigs.empty() && (score.keySigs[0].fifths != 0 || score.keySigs[0].minor)))
+            return;
+        double w[12] = {};
+        for (auto& n : score.notes)
+            if (n.part >= 0 && n.part < (int) score.parts.size() && ! score.parts[(size_t) n.part].drums)
+                w[n.key % 12] += n.length;
+        static const int majorScale[7] = { 0, 2, 4, 5, 7, 9, 11 };
+        auto outside = [&] (int fifths) {
+            const int tonic = ((fifths * 7) % 12 + 12) % 12;
+            double inScale = 0, total = 0;
+            for (int pc = 0; pc < 12; ++pc)
+                total += w[pc];
+            for (int d : majorScale)
+                inScale += w[(tonic + d) % 12];
+            inScale += w[(tonic + 8) % 12]; // leading tone of the relative minor
+            return total - inScale;
+        };
+        int best = 0;
+        for (int f = -6; f <= 6; ++f)
+            if (outside (f) < outside (best) - 1.0e-9)
+                best = f;
+        if (best == 0 || outside (best) > 0.75 * outside (0))
+            return;
+        const int majorTonic = ((best * 7) % 12 + 12) % 12;
+        const int minorTonic = (majorTonic + 9) % 12;
+        KeySignature ks;
+        ks.fifths = best;
+        ks.minor = w[minorTonic] > w[majorTonic];
+        score.keySigs = { ks };
+    }
+
+    std::shared_ptr<Score> fromMidi (const juce::MidiFile& midiIn, const SoundFont* sf)
+    {
+        juce::MidiFile midi (midiIn);
+        double ticksPerBeat = midi.getTimeFormat();
+        if (ticksPerBeat <= 0)
+        {
+            // SMPTE time: work in seconds at a nominal 120 bpm
+            midi.convertTimestampTicksToSeconds();
+            ticksPerBeat = 0.5;
+        }
+
+        auto score = std::make_shared<Score>();
+        std::map<std::pair<int, int>, Stream> streams;
+        juce::StringArray trackNames;
+
+        for (int t = 0; t < midi.getNumTracks(); ++t)
+        {
+            auto* seq = midi.getTrack (t);
+            juce::String trackName;
+            int bankMsb[16] = {}, bankLsb[16] = {};
+            std::array<std::vector<std::pair<double, int>>, 128 * 16> open;
+
+            for (auto* ev : *seq)
+            {
+                auto& m = ev->message;
+                const double beat = m.getTimeStamp() / ticksPerBeat;
+
+                if (m.isMetaEvent())
+                {
+                    if (m.isTempoMetaEvent())
+                        score->tempos.push_back ({ beat, 60.0 / juce::jmax (1.0e-6, m.getTempoSecondsPerQuarterNote()) });
+                    else if (m.isTimeSignatureMetaEvent())
+                    {
+                        int num = 4, den = 4;
+                        m.getTimeSignatureInfo (num, den);
+                        score->timeSigs.push_back ({ beat, num, den });
+                    }
+                    else if (m.isKeySignatureMetaEvent())
+                        score->keySigs.push_back ({ beat, m.getKeySignatureNumberOfSharpsOrFlats(), ! m.isKeySignatureMajorKey() });
+                    else if (m.isTrackNameEvent() && trackName.isEmpty())
+                        trackName = m.getTextFromTextMetaEvent().trim();
+                    continue;
+                }
+
+                const int ch = m.getChannel() - 1;
+                if (ch < 0 || ch > 15)
+                    continue;
+                auto& s = streams[{ t, ch }];
+                s.track = t;
+                s.channel = ch;
+
+                if (m.isController())
+                {
+                    if (m.getControllerNumber() == 0)
+                        bankMsb[ch] = m.getControllerValue();
+                    else if (m.getControllerNumber() == 32)
+                        bankLsb[ch] = m.getControllerValue();
+                }
+                else if (m.isProgramChange())
+                {
+                    int bank = bankMsb[ch] != 0 ? bankMsb[ch] : bankLsb[ch];
+                    s.programs.emplace_back (beat, bank, m.getProgramChangeNumber());
+                }
+                else if (m.isNoteOn())
+                    open[(size_t) (ch * 128 + m.getNoteNumber())].push_back ({ beat, m.getVelocity() });
+                else if (m.isNoteOff())
+                {
+                    auto& stack = open[(size_t) (ch * 128 + m.getNoteNumber())];
+                    if (! stack.empty())
+                    {
+                        auto [start, vel] = stack.front();
+                        stack.erase (stack.begin());
+                        ScoreNote n;
+                        n.start = start;
+                        n.length = juce::jmax (1.0 / 64.0, beat - start);
+                        n.key = m.getNoteNumber();
+                        n.velocity = vel;
+                        s.notes.push_back (n);
+                    }
+                }
+            }
+            for (auto& [key, s] : streams)
+                if (s.track == t)
+                    s.trackName = trackName;
+            trackNames.add (trackName);
+        }
+
+        if (midi.getNumTracks() > 0)
+            score->title = trackNames[0];
+
+        // Organ files often double one line on several channels, one channel per stop.
+        // Merge streams with identical notes into one part with a combined registration.
+        std::vector<Stream*> order;
+        for (auto& [key, s] : streams)
+            if (! s.notes.empty())
+                order.push_back (&s);
+
+        auto sameNotes = [] (const Stream& a, const Stream& b) {
+            if (a.notes.size() != b.notes.size())
+                return false;
+            for (size_t i = 0; i < a.notes.size(); ++i)
+                if (std::abs (a.notes[i].start - b.notes[i].start) > 1.0e-6 || a.notes[i].key != b.notes[i].key)
+                    return false;
+            return true;
+        };
+        for (auto* s : order)
+            std::sort (s->notes.begin(), s->notes.end(), [] (auto& a, auto& b) {
+                return a.start != b.start ? a.start < b.start : a.key < b.key;
+            });
+
+        std::vector<bool> used (order.size(), false);
+        for (size_t i = 0; i < order.size(); ++i)
+        {
+            if (used[i])
+                continue;
+            std::vector<Stream*> group { order[i] };
+            for (size_t j = i + 1; j < order.size(); ++j)
+                if (! used[j] && order[j]->channel != 9 && order[i]->channel != 9 && sameNotes (*order[i], *order[j]))
+                {
+                    group.push_back (order[j]);
+                    used[j] = true;
+                }
+
+            ScorePart part;
+            auto& first = *group.front();
+            part.drums = first.channel == 9;
+            const bool multiTrack = trackNames.size() > 1 && first.trackName.isNotEmpty() && first.track > 0;
+            part.name = multiTrack ? first.trackName : "Kanal " + juce::String (first.channel + 1);
+            if (group.size() > 1)
+            {
+                juce::StringArray chans;
+                for (auto* g : group)
+                    chans.add (juce::String (g->channel + 1));
+                part.name = multiTrack ? first.trackName : juce::String::fromUTF8 ("Kanäle ") + chans.joinIntoString ("+");
+            }
+
+            const double firstBeat = first.notes.front().start;
+            auto collect = [&] (double beat) {
+                Registration reg;
+                for (auto* g : group)
+                    for (auto bp : programsAt (*g, beat))
+                    {
+                        if (sf != nullptr)
+                            sf->resolvePreset (bp.first, bp.second);
+                        if (std::find (reg.begin(), reg.end(), bp) == reg.end())
+                            reg.push_back (bp);
+                    }
+                return reg;
+            };
+            part.registration = collect (firstBeat);
+
+            const int partIndex = (int) score->parts.size();
+            score->parts.push_back (part);
+            for (auto n : first.notes)
+            {
+                n.part = partIndex;
+                score->notes.push_back (n);
+            }
+
+            // later program changes become registration changes during playback
+            std::vector<double> changeBeats;
+            for (auto* g : group)
+                for (auto& [b, bk, pr] : g->programs)
+                    if (b > firstBeat + 1.0e-6)
+                        changeBeats.push_back (b);
+            std::sort (changeBeats.begin(), changeBeats.end());
+            changeBeats.erase (std::unique (changeBeats.begin(), changeBeats.end()), changeBeats.end());
+            Registration last = part.registration;
+            for (double b : changeBeats)
+            {
+                auto reg = collect (b);
+                if (reg != last && ! reg.empty())
+                {
+                    score->registrationChanges.push_back ({ b, partIndex, reg });
+                    last = reg;
+                }
+            }
+        }
+
+        score->finalise();
+        estimateKeyIfMissing (*score);
+        // drop duplicate meta events that multi-track files repeat in every track
+        auto dedupe = [] (auto& v, auto eq) {
+            v.erase (std::unique (v.begin(), v.end(), eq), v.end());
+        };
+        dedupe (score->tempos, [] (auto& a, auto& b) { return std::abs (a.beat - b.beat) < 1.0e-9 && a.bpm == b.bpm; });
+        dedupe (score->timeSigs, [] (auto& a, auto& b) { return std::abs (a.beat - b.beat) < 1.0e-9; });
+        dedupe (score->keySigs, [] (auto& a, auto& b) { return std::abs (a.beat - b.beat) < 1.0e-9; });
+        return score;
+    }
+
+    std::shared_ptr<Score> fromMidiData (const void* data, size_t size, const SoundFont* sf, juce::String& error)
+    {
+        juce::MemoryInputStream in (data, size, false);
+        juce::MidiFile mf;
+        if (! mf.readFrom (in, true))
+        {
+            error = juce::String::fromUTF8 ("Die MIDI-Daten sind ungültig.");
+            return {};
+        }
+        auto s = fromMidi (mf, sf);
+        if (s == nullptr || s->notes.empty())
+        {
+            error = juce::String::fromUTF8 ("Die Datei enthält keine Noten.");
+            return {};
+        }
+        return s;
+    }
+
+    std::shared_ptr<Score> loadMidiFile (const juce::File& f, const SoundFont* sf, juce::String& error)
+    {
+        juce::MemoryBlock mb;
+        if (! f.loadFileAsData (mb))
+        {
+            error = "Datei kann nicht gelesen werden.";
+            return {};
+        }
+        auto s = fromMidiData (mb.getData(), mb.getSize(), sf, error);
+        if (s != nullptr && s->title.isEmpty())
+            s->title = f.getFileNameWithoutExtension();
+        return s;
+    }
+
+    juce::MidiFile toMidi (const Score& score, const std::vector<juce::String>& partNames, const std::vector<Registration>& registrations)
+    {
+        constexpr int ppq = 480;
+        auto tick = [] (double beat) { return std::round (beat * ppq); };
+        juce::MidiFile mf;
+        mf.setTicksPerQuarterNote (ppq);
+
+        juce::MidiMessageSequence meta;
+        if (score.title.isNotEmpty())
+            meta.addEvent (juce::MidiMessage::textMetaEvent (3, score.title), 0);
+        for (auto& t : score.tempos)
+            meta.addEvent (juce::MidiMessage::tempoMetaEvent ((int) std::round (60000000.0 / t.bpm)), tick (t.beat));
+        for (auto& t : score.timeSigs)
+            meta.addEvent (juce::MidiMessage::timeSignatureMetaEvent (t.num, t.den), tick (t.beat));
+        for (auto& k : score.keySigs)
+            meta.addEvent (juce::MidiMessage::keySignatureMetaEvent (k.fifths, k.minor), tick (k.beat));
+        meta.addEvent (juce::MidiMessage::endOfTrack(), tick (score.lengthBeats()));
+        mf.addTrack (meta);
+
+        // channels in use (1-based), skipping 10 (drums)
+        std::vector<int> freeChannels;
+        for (int c = 1; c <= 16; ++c)
+            if (c != 10)
+                freeChannels.push_back (c);
+        size_t nextChannel = 0;
+        int playable = 0;
+        for (auto& p : score.parts)
+            playable += p.drums ? 0 : 1;
+
+        for (int p = 0; p < (int) score.parts.size(); ++p)
+        {
+            auto& part = score.parts[(size_t) p];
+            Registration reg = p < (int) registrations.size() && ! registrations[(size_t) p].empty() ? registrations[(size_t) p] : part.registration;
+            // keep at least one channel for every part that is still to come
+            const size_t remainingParts = (size_t) juce::jmax (0, playable - 1);
+            const size_t available = freeChannels.size() > nextChannel + remainingParts ? freeChannels.size() - nextChannel - remainingParts : 1;
+            if (! part.drums)
+                --playable;
+
+            std::vector<std::pair<int, std::pair<int, int>>> channels; // channel -> (bank, program)
+            if (part.drums)
+                channels.push_back ({ 10, { -1, -1 } });
+            else if (reg.empty())
+                channels.push_back ({ freeChannels[juce::jmin (nextChannel++, freeChannels.size() - 1)], { -1, -1 } });
+            else
+                for (size_t r = 0; r < reg.size() && r < available; ++r)
+                    channels.push_back ({ freeChannels[juce::jmin (nextChannel++, freeChannels.size() - 1)], reg[r] });
+
+            juce::MidiMessageSequence seq;
+            auto name = p < (int) partNames.size() && partNames[(size_t) p].isNotEmpty() ? partNames[(size_t) p] : part.name;
+            seq.addEvent (juce::MidiMessage::textMetaEvent (3, name), 0);
+            for (auto& [ch, bp] : channels)
+                if (bp.second >= 0)
+                {
+                    seq.addEvent (juce::MidiMessage::controllerEvent (ch, 0, bp.first), 0);
+                    seq.addEvent (juce::MidiMessage::controllerEvent (ch, 32, 0), 0);
+                    seq.addEvent (juce::MidiMessage::programChange (ch, bp.second), 0);
+                }
+            for (auto& n : score.notes)
+                if (n.part == p)
+                    for (auto& [ch, bp] : channels)
+                    {
+                        seq.addEvent (juce::MidiMessage::noteOn (ch, n.key, (juce::uint8) juce::jlimit (1, 127, n.velocity)), tick (n.start));
+                        seq.addEvent (juce::MidiMessage::noteOff (ch, n.key), tick (n.start + n.length));
+                    }
+            seq.updateMatchedPairs();
+            mf.addTrack (seq);
+        }
+        return mf;
+    }
+
+    bool saveMidiFile (const Score& score, const juce::File& f, const std::vector<juce::String>& partNames, const std::vector<Registration>& registrations)
+    {
+        auto mf = toMidi (score, partNames, registrations);
+        f.deleteFile();
+        juce::FileOutputStream out (f);
+        return out.openedOk() && mf.writeTo (out, 1);
+    }
+
+    std::vector<int> autoAssign (const Score& score, int numManuals, int pedalIndex)
+    {
+        std::vector<int> result (score.parts.size(), -1);
+        std::vector<int> candidates;
+        for (int p = 0; p < (int) score.parts.size(); ++p)
+            if (! score.parts[(size_t) p].drums && score.parts[(size_t) p].count > 0)
+                candidates.push_back (p);
+        if (candidates.empty() || numManuals <= 0)
+            return result;
+
+        // parts named "Pedal" (e.g. from MusicXML/MEI organ scores) go to the pedal
+        if (pedalIndex >= 0)
+            for (int p : candidates)
+                if (score.parts[(size_t) p].name.containsIgnoreCase ("pedal") || score.parts[(size_t) p].name.startsWithIgnoreCase ("ped."))
+                    result[(size_t) p] = pedalIndex;
+
+        int pedalPart = -1;
+        bool namedPedal = false;
+        for (int r : result)
+            namedPedal |= r == pedalIndex && r >= 0;
+        if (! namedPedal && candidates.size() >= 2 && pedalIndex >= 0)
+        {
+            for (int p : candidates)
+            {
+                auto& part = score.parts[(size_t) p];
+                if (part.highest <= 67 && part.meanPitch < 52
+                    && (pedalPart < 0 || part.meanPitch < score.parts[(size_t) pedalPart].meanPitch))
+                    pedalPart = p;
+            }
+        }
+        if (pedalPart >= 0)
+            result[(size_t) pedalPart] = pedalIndex;
+
+        // the remaining parts go to the manuals, the busiest to manual I. Staves of one
+        // instrument (same name: right and left hand) share a manual.
+        std::vector<int> manualParts;
+        for (int p : candidates)
+            if (p != pedalPart && result[(size_t) p] < 0)
+                manualParts.push_back (p);
+        std::map<juce::String, int> countByName;
+        for (int p : manualParts)
+            countByName[score.parts[(size_t) p].name] += score.parts[(size_t) p].count;
+        std::vector<juce::String> names;
+        for (auto& [n, c] : countByName)
+            names.push_back (n);
+        std::stable_sort (names.begin(), names.end(), [&] (auto& a, auto& b) { return countByName[a] > countByName[b]; });
+        for (int p : manualParts)
+        {
+            const int rank = (int) (std::find (names.begin(), names.end(), score.parts[(size_t) p].name) - names.begin());
+            result[(size_t) p] = rank % numManuals;
+        }
+        return result;
+    }
+} // namespace ScoreIO
+} // namespace orgel
