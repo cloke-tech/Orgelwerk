@@ -17,6 +17,10 @@ public:
     void mouseDown (const juce::MouseEvent& e) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override;
     void showPage (int first);
+    bool isZoomed() const { return zoomed; }
+    void setZoomed (bool z) { zoomButton.setToggleState (z, juce::sendNotification); }
+    bool isFollowing() const { return follow; }
+    void setFollowing (bool f) { followButton.setToggleState (f, juce::sendNotification); }
 
 private:
     struct Page

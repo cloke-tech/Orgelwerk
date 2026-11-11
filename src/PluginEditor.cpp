@@ -102,14 +102,29 @@ OrgelEditor::OrgelEditor (OrgelProcessor& p)
     desk.setPiece (shownPiece);
 
     setResizable (true, true);
-    setResizeLimits (1100, 720, 3200, 2200);
-    setSize (1480, 940);
+    // open at a comfortable size for this screen (at most 1480 x 940, at most 90 % of it)
+    setResizeLimits (960, 640, 3200, 2200);
+    {
+        auto area = juce::Rectangle<int> (1440, 900);
+        if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+            area = display->userArea;
+        setSize (juce::jlimit (960, 1480, (int) (area.getWidth() * 0.9)),
+                 juce::jlimit (640, 940, (int) (area.getHeight() * 0.88) - 30));
+    }
+    if (proc.isStandalone())
+        optionsButton.setVisible (false); // in the menu bar instead
     setWantsKeyboardFocus (true);
     startTimerHz (30);
 }
 
 OrgelEditor::~OrgelEditor()
 {
+   #if JUCE_MAC
+    if (juce::MenuBarModel::getMacMainMenu() == this)
+        juce::MenuBarModel::setMacMainMenu (nullptr);
+   #endif
+    if (auto* window = findParentComponentOfClass<juce::DocumentWindow>())
+        window->setMenuBar (nullptr);
     proc.organ.removeChangeListener (this);
     proc.removeChangeListener (this);
 }
@@ -186,6 +201,8 @@ void OrgelEditor::rebuildConsole()
 
 void OrgelEditor::changeListenerCallback (juce::ChangeBroadcaster*)
 {
+    if (proc.isStandalone())
+        menuItemsChanged();
     if (structureSignature() != lastSignature)
         rebuildConsole();
     else
@@ -286,6 +303,14 @@ bool OrgelEditor::keyStateChanged (bool)
 
 bool OrgelEditor::keyPressed (const juce::KeyPress& key)
 {
+    if (key.getModifiers().isCommandDown())
+    {
+        const auto c = juce::CharacterFunctions::toLowerCase (key.getTextCharacter() != 0 ? key.getTextCharacter() : (juce::juce_wchar) key.getKeyCode());
+        if (c == 'o') { openFile(); return true; }
+        if (c == 'e') { showExportMenu(); return true; }
+        if (c == ',') { menuItemSelected (4, 0); return true; }
+        return false;
+    }
     if (computerKeyOffset (key.getKeyCode()) >= 0)
         return true;
     if (key.getTextCharacter() == ',' || key.getTextCharacter() == '.')
@@ -514,7 +539,8 @@ void OrgelEditor::resized()
     reverb.setBounds (rightPart.removeFromRight (34));
     reverbLabel.setBounds (rightPart.removeFromRight (36));
     rightPart.removeFromRight (6);
-    optionsButton.setBounds (rightPart.removeFromRight (78));
+    if (optionsButton.isVisible())
+        optionsButton.setBounds (rightPart.removeFromRight (78));
     rightPart.removeFromRight (4);
     soundFontButton.setBounds (rightPart.removeFromRight (86));
     rightPart.removeFromRight (4);
@@ -759,6 +785,176 @@ void OrgelEditor::showPartMenu()
         if (proc.applyFileRegistration)
             proc.applyPieceRegistration();
     });
+}
+
+//==============================================================================
+void OrgelEditor::parentHierarchyChanged()
+{
+    if (proc.isStandalone() && ! windowSetUp && findParentComponentOfClass<juce::DocumentWindow>() != nullptr)
+    {
+        windowSetUp = true;
+        juce::Component::SafePointer<OrgelEditor> safe (this);
+        juce::MessageManager::callAsync ([safe] {
+            if (safe != nullptr)
+                safe->setUpStandaloneWindow();
+        });
+    }
+}
+
+// The standalone app: a normal window with the system's title bar, the menus in the
+// macOS menu bar (or in the window on Windows/Linux), and no JUCE "Options" button.
+void OrgelEditor::setUpStandaloneWindow()
+{
+    auto* window = findParentComponentOfClass<juce::DocumentWindow>();
+    if (window == nullptr)
+        return;
+    for (auto* c : window->getChildren())
+        if (auto* b = dynamic_cast<juce::Button*> (c))
+            if (b->getButtonText() == "Options")
+                b->setVisible (false);
+    window->setUsingNativeTitleBar (true);
+    window->setResizable (true, false);
+   #if JUCE_MAC
+    juce::PopupMenu appleExtras;
+    appleExtras.addItem (4, juce::String::fromUTF8 ("Einstellungen…"));
+    juce::MenuBarModel::setMacMainMenu (this, &appleExtras);
+   #else
+    window->setMenuBar (this);
+   #endif
+    // keep the window on screen and not larger than the display
+    if (auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (window->getScreenBounds()))
+    {
+        auto area = display->userArea;
+        auto bounds = window->getBounds();
+        bounds.setSize (juce::jmin (bounds.getWidth(), area.getWidth()), juce::jmin (bounds.getHeight(), area.getHeight()));
+        window->setBounds (bounds.constrainedWithin (area));
+    }
+}
+
+juce::StringArray OrgelEditor::getMenuBarNames()
+{
+   #if JUCE_MAC
+    return { "Ablage", "Wiedergabe", "Orgel", "Ansicht" };
+   #else
+    return { "Datei", "Wiedergabe", "Orgel", "Ansicht" };
+   #endif
+}
+
+juce::PopupMenu OrgelEditor::getMenuForIndex (int index, const juce::String&)
+{
+    juce::PopupMenu m;
+    auto piece = proc.getPiece();
+    auto item = [] (int id, const juce::String& text, const juce::String& shortcut = {}, bool enabled = true, bool ticked = false) {
+        juce::PopupMenu::Item it (text);
+        it.itemID = id;
+        it.isEnabled = enabled;
+        it.isTicked = ticked;
+        it.shortcutKeyDescription = shortcut;
+        return it;
+    };
+    const juce::String cmd = juce::String::fromUTF8 ("\xe2\x8c\x98");
+    if (index == 0)
+    {
+        m.addItem (item (1, juce::String::fromUTF8 ("Öffnen…"), cmd + "O"));
+        juce::PopupMenu exportMenu;
+        auto formats = Formats::exportFormats();
+        const bool hasMuseScore = Formats::findMuseScore().existsAsFile();
+        for (int i = 0; i < (int) formats.size(); ++i)
+        {
+            auto& f = formats[(size_t) i];
+            exportMenu.addItem (item (100 + i, f.description + "  (." + f.extension + ")", {}, piece != nullptr && (! f.needsMuseScore || hasMuseScore)));
+            if (f.id == "mscz" || f.id == "png")
+                exportMenu.addSeparator();
+        }
+        m.addSubMenu ("Exportieren", exportMenu, piece != nullptr);
+        m.addSeparator();
+        m.addItem (item (2, juce::String::fromUTF8 ("SoundFont laden…")));
+        m.addItem (item (3, "Eingebaute SoundFont (Jeux14)"));
+       #if ! JUCE_MAC
+        m.addSeparator();
+        m.addItem (item (4, juce::String::fromUTF8 ("Audio- und MIDI-Einstellungen…")));
+       #endif
+    }
+    else if (index == 1)
+    {
+        m.addItem (item (10, proc.isPlaying() ? "Pause" : "Abspielen", "Leertaste", piece != nullptr));
+        m.addItem (item (11, "Stopp", {}, piece != nullptr));
+        m.addItem (item (12, "Zum Anfang", {}, piece != nullptr));
+        m.addItem (item (13, juce::String::fromUTF8 ("Stück in Schleife"), {}, true, proc.getLoop()));
+        m.addSeparator();
+        m.addItem (item (14, "Registrierung hier merken", "R", piece != nullptr));
+        m.addItem (item (15, juce::String::fromUTF8 ("Registrierspur löschen"), {}, ! proc.getMarks().empty()));
+        m.addSeparator();
+        m.addItem (item (16, "Registrierung aus der Datei beim Laden ziehen", {}, true, proc.applyFileRegistration));
+    }
+    else if (index == 2)
+    {
+        m.addItem (item (20, juce::String::fromUTF8 ("Manual hinzufügen")));
+        m.addItem (item (21, juce::String::fromUTF8 ("Generalauslöser (alle Register ab)")));
+        m.addItem (item (22, juce::String::fromUTF8 ("Pfeifen räumlich aufstellen"), {}, true, proc.organ.spatial));
+        juce::PopupMenu transpose;
+        for (int t = -6; t <= 6; ++t)
+            transpose.addItem (item (1000 + t, (t > 0 ? "+" : "") + juce::String (t) + juce::String::fromUTF8 (" Halbtöne"), {}, true, proc.organ.transpose == t));
+        m.addSubMenu ("Transposition", transpose);
+        m.addSeparator();
+        m.addItem (item (25, juce::String::fromUTF8 ("Orgel auf Standard zurücksetzen")));
+        m.addItem (item (26, juce::String::fromUTF8 ("Alle Töne aus (Panik)")));
+    }
+    else if (index == 3)
+    {
+        m.addItem (item (30, "Noten in Seitenbreite", {}, true, desk.isZoomed()));
+        m.addItem (item (31, juce::String::fromUTF8 ("Beim Abspielen mitblättern"), {}, true, desk.isFollowing()));
+    }
+    return m;
+}
+
+void OrgelEditor::menuItemSelected (int id, int)
+{
+    if (id >= 100 && id < 200)
+    {
+        auto formats = Formats::exportFormats();
+        if (id - 100 < (int) formats.size())
+            exportAs (formats[(size_t) (id - 100)]);
+        return;
+    }
+    if (id >= 994 && id <= 1006)
+    {
+        proc.organ.setTranspose (id - 1000);
+        return;
+    }
+    switch (id)
+    {
+        case 1: openFile(); break;
+        case 2:
+            chooser = std::make_unique<juce::FileChooser> ("SoundFont laden", juce::File(), "*.sf2");
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
+                juce::String err;
+                if (fc.getResult().existsAsFile() && ! proc.loadSoundFont (fc.getResult(), err))
+                    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "SoundFont", err);
+            });
+            break;
+        case 3: proc.useBuiltInSoundFont(); break;
+        case 4:
+            if (auto* holder = juce::StandalonePluginHolder::getInstance())
+                holder->showAudioSettingsDialog();
+            break;
+        case 10: togglePlay(); break;
+        case 11: proc.stop(); break;
+        case 12: proc.seek (0.0); break;
+        case 13: proc.setLoop (! proc.getLoop()); break;
+        case 14: proc.addMarkHere(); break;
+        case 15: proc.clearMarks(); break;
+        case 16: proc.applyFileRegistration = ! proc.applyFileRegistration; break;
+        case 20: proc.organ.addManual(); break;
+        case 21: proc.organ.clearRegistration(); break;
+        case 22: proc.organ.setSpatial (! proc.organ.spatial); break;
+        case 25: proc.organ.setDefaultDisposition(); break;
+        case 26: proc.organ.allNotesOff(); break;
+        case 30: desk.setZoomed (! desk.isZoomed()); break;
+        case 31: desk.setFollowing (! desk.isFollowing()); break;
+        default: break;
+    }
+    menuItemsChanged();
 }
 
 void OrgelEditor::showTrackMenu()

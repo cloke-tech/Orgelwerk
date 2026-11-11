@@ -45,6 +45,7 @@ private:
 class OrgelEditor : public juce::AudioProcessorEditor,
                     public juce::FileDragAndDropTarget,
                     private juce::ChangeListener,
+                    public juce::MenuBarModel,
                     private juce::Timer
 {
 public:
@@ -57,6 +58,12 @@ public:
     void filesDropped (const juce::StringArray& files, int, int) override;
     bool keyPressed (const juce::KeyPress& key) override;
     bool keyStateChanged (bool isKeyDown) override;
+    void parentHierarchyChanged() override;
+
+    // menu bar of the standalone app (macOS main menu, or inside the window elsewhere)
+    juce::StringArray getMenuBarNames() override;
+    juce::PopupMenu getMenuForIndex (int index, const juce::String& name) override;
+    void menuItemSelected (int itemID, int topLevelMenuIndex) override;
 
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
@@ -116,6 +123,8 @@ private:
     std::shared_ptr<Piece> shownPiece;
     std::unique_ptr<juce::FileChooser> chooser;
     bool draggingPosition = false;
+    bool windowSetUp = false;
+    void setUpStandaloneWindow();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OrgelEditor)
 };
