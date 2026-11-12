@@ -79,5 +79,9 @@ Die App öffnet eine Notendatei auch direkt beim Start: `Orgelwerk stueck.mid`.
 - [JUCE 8](https://juce.com) – App- und Plugin-Gerüst (AGPLv3 oder kommerzielle Lizenz)
 - [Verovio 6.4](https://www.verovio.org) – Notensatz und Notenformate (LGPLv3)
 - [TinySoundFont](https://github.com/schellingb/TinySoundFont) – SF2-Wiedergabe (MIT)
-- Jeux14.sf2 – Orgel-SoundFont aus dem MuseScore-Ordner (vor einer Weitergabe der App
-  die Lizenz der SoundFont prüfen)
+- **Jeux 1.4** (`resources/Jeux14.sf2`) – Orgel-SoundFont von John W. McCoy, Long Beach (CA),
+  © 2000, <https://www.realmac.info/download.htm> (auch bei HammerSound). Laut Autor darf die Datei
+  frei weitergegeben werden, aber **ohne schriftliche Erlaubnis des Autors nicht kommerziell
+  genutzt werden**. Damit ist auch Orgelwerk mit eingebauter Jeux-SoundFont nur für
+  nichtkommerzielle Zwecke gedacht; eine andere SF2 lässt sich über **SoundFont** laden.
+  Siehe [LIZENZEN.md](LIZENZEN.md).
