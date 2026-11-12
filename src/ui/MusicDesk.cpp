@@ -62,12 +62,56 @@ void MusicDesk::setPiece (std::shared_ptr<Piece> p)
             for (auto& id : e.on)
                 if (! noteBeat.count (id))
                     noteBeat[id] = e.qstamp;
+    tallestLine = 0.0f;
+    measureLines();
     status = piece == nullptr ? juce::String (juce::String::fromUTF8 ("Noten hierher ziehen oder über „Öffnen“ laden"))
                               : (piece->notation == nullptr ? (piece->notationFromScore ? juce::String ("Klicken, um die Noten zu setzen")
                                                                                          : juce::String (juce::String::fromUTF8 ("Kein Notenbild verfügbar")))
                                                             : juce::String());
     updateNav();
     repaint();
+}
+
+// How tall the tallest line of staves is (as a part of the page height), measured once in the
+// background: page width shrinks the pages so that it fits the desk.
+void MusicDesk::measureLines()
+{
+    if (piece == nullptr || piece->notation == nullptr)
+        return;
+    auto notation = piece->notation;
+    const int gen = generation;
+    juce::Component::SafePointer<MusicDesk> safe (this);
+    pagePool.addJob ([notation, gen, safe] {
+        float tallest = 0.0f;
+        for (int p = 0; p < notation->getPageCount(); ++p)
+        {
+            Page page;
+            if (auto xml = juce::parseXML (notation->getPageSVG (p)))
+                page.drawable = juce::Drawable::createFromSVG (*xml);
+            if (page.drawable == nullptr)
+                continue;
+            std::function<void (juce::Drawable*)> walk = [&] (juce::Drawable* d) {
+                if (d->getComponentID().isNotEmpty())
+                    page.ids[d->getComponentID()] = d;
+                for (auto* c : d->getChildren())
+                    if (auto* cd = dynamic_cast<juce::Drawable*> (c))
+                        walk (cd);
+            };
+            walk (page.drawable.get());
+            const juce::Rectangle<float> unit (0.0f, 0.0f, 2100.0f, 2970.0f);
+            for (auto& sid : notation->getSystemIds (p))
+                if (auto it = page.ids.find (sid); it != page.ids.end())
+                    tallest = juce::jmax (tallest, elementArea (page, it->second, unit).getHeight() / 2970.0f);
+        }
+        juce::MessageManager::callAsync ([safe, gen, tallest] {
+            if (safe == nullptr || gen != safe->generation)
+                return;
+            // a little room for the text above the top staff
+            safe->tallestLine = juce::jmin (1.0f, tallest * 1.08f);
+            safe->updateNav();
+            safe->repaint();
+        });
+    });
 }
 
 MusicDesk::~MusicDesk()
@@ -150,9 +194,20 @@ int MusicDesk::pageCount() const
 
 // Page width: all pages one below the other, scrolled like a document. "scroll" counts pages
 // from the top of the first one (2.5 = the middle of the third page is at the top of the view).
+// The page is as wide as the desk, unless the tallest line of staves would then not fit
+// in the desk: then the page is made smaller, so every line can be seen whole.
+float MusicDesk::zoomPageWidth() const
+{
+    const auto view = viewArea();
+    float w = view.getWidth();
+    if (tallestLine > 0.0f)
+        w = juce::jmin (w, view.getHeight() * 0.94f / (tallestLine * 2970.0f / 2100.0f));
+    return juce::jmax (100.0f, w);
+}
+
 float MusicDesk::zoomPageHeight() const
 {
-    return viewArea().getWidth() * 2970.0f / 2100.0f;
+    return zoomPageWidth() * 2970.0f / 2100.0f;
 }
 
 float MusicDesk::zoomStride() const
@@ -172,7 +227,7 @@ juce::Rectangle<float> MusicDesk::pageRect (int index) const
     if (zoomed)
     {
         auto area = viewArea();
-        return { area.getX(), area.getY() + (float) ((index - scroll) * zoomStride()), area.getWidth(), zoomPageHeight() };
+        return { area.getCentreX() - zoomPageWidth() / 2, area.getY() + (float) ((index - scroll) * zoomStride()), zoomPageWidth(), zoomPageHeight() };
     }
     const int slot = index - firstPage;
     if (slot < 0 || slot >= visiblePages())
@@ -236,7 +291,7 @@ juce::Rectangle<float> MusicDesk::pageSlot (int slot) const
 {
     auto area = viewArea();
     if (zoomed)
-        return { area.getX(), area.getY(), area.getWidth(), zoomPageHeight() };
+        return { area.getCentreX() - zoomPageWidth() / 2, area.getY(), zoomPageWidth(), zoomPageHeight() };
     const int n = visiblePages();
     const float pageAspect = 2100.0f / 2970.0f;
     float h = area.getHeight();
@@ -576,8 +631,9 @@ void MusicDesk::update (double dt)
         repaint();
 }
 
-// Page width: keeps the playing system in the upper third of the view, gliding there when it
-// leaves the middle part. Checked every frame, so it also corrects itself once a page that was
+// Page width: keeps the whole line of staves that is playing in view. When it leaves the view,
+// the view glides until that line's top is just below the top edge (like turning to the next
+// line when reading). Checked every frame, so it also corrects itself once a page that was
 // still being drawn arrives.
 void MusicDesk::followInZoom()
 {
@@ -587,22 +643,39 @@ void MusicDesk::followInZoom()
     if (page < 0)
         return;
     const auto view = viewArea();
-    double yInPage = 0; // where the note is on its page, in pixels from the page top
+    // the line of staves (system) the note is in, in pixels from its page top
+    juce::Range<double> line (0.0, 1.0);
     bool exact = false;
     if (auto* pg = findPage (page))
         if (auto it = pg->ids.find (followNote); it != pg->ids.end())
         {
-            yInPage = elementArea (*pg, it->second, { view.getX(), 0.0f, view.getWidth(), zoomPageHeight() }).getCentreY();
+            const auto pageArea = juce::Rectangle<float> (view.getCentreX() - zoomPageWidth() / 2, 0.0f, zoomPageWidth(), zoomPageHeight());
+            const auto note = elementArea (*pg, it->second, pageArea);
+            line = { note.getY(), note.getBottom() };
+            for (auto& sid : piece->notation->getSystemIds (page))
+                if (auto s2 = pg->ids.find (sid); s2 != pg->ids.end())
+                {
+                    const auto sys = elementArea (*pg, s2->second, pageArea);
+                    if (sys.getY() - 4.0f <= note.getCentreY() && note.getCentreY() <= sys.getBottom() + 4.0f)
+                    {
+                        line = { sys.getY(), sys.getBottom() };
+                        break;
+                    }
+                }
             exact = true;
         }
-    const double target = juce::jlimit (0.0, maxScroll(), page + (yInPage - view.getHeight() * 0.3) / zoomStride());
-    const double yNow = (page - scrollTarget) * zoomStride() + yInPage; // with the glide already under way
-    if (yNow < view.getHeight() * 0.12 || yNow > view.getHeight() * 0.72 || (exact && ! followExact))
-        scrollTarget = target;
+    // the whole line in view: nothing to do. Else its top goes just below the top of the view
+    // (a line taller than the view shows from its top).
+    const double margin = view.getHeight() * 0.04;
+    const double top = (page - scrollTarget) * zoomStride() + line.getStart();    // with the glide under way
+    const double bottom = (page - scrollTarget) * zoomStride() + line.getEnd();
+    const bool inView = top >= margin * 0.5 && bottom <= view.getHeight() - margin * 0.5;
+    if (! inView)
+        scrollTarget = juce::jlimit (0.0, maxScroll(), page + (line.getStart() - margin) / zoomStride());
     followExact = exact;
 }
 
-juce::Rectangle<float> MusicDesk::elementArea (Page& page, juce::Drawable* d, juce::Rectangle<float> slot) const
+juce::Rectangle<float> MusicDesk::elementArea (Page& page, juce::Drawable* d, juce::Rectangle<float> slot)
 {
     auto* root = page.drawable.get();
     auto fit = juce::RectanglePlacement (juce::RectanglePlacement::centred).getTransformToFit (root->getDrawableBounds(), slot);

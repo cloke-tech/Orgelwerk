@@ -122,6 +122,7 @@ static void applyOrganInfo (NotationBuilder::Options& opt, const OrganInfo& info
 {
     opt.divisionNames = info.divisionNames;
     opt.colourManuals = info.colourManuals;
+    opt.staffPerManual = info.staffPerManual;
     opt.divisionIsPedal = info.divisionIsPedal;
     if (info.soundFont == nullptr)
         return;
@@ -149,6 +150,7 @@ std::shared_ptr<Notation> engrave (const Score& score, const std::vector<bool>& 
     applyOrganInfo (opt, organ);
     auto xml = NotationBuilder::toMusicXML (score, opt);
     auto n = std::make_shared<Notation>();
+    n->setHideEmptyStaves (opt.staffPerManual);
     if (! n->loadData (xml, "musicxml", error))
         return {};
     return n;
@@ -233,6 +235,7 @@ static OrganInfo organInfoOf (const ExportContext& ctx)
 {
     auto info = ctx.liveOrgan != nullptr ? OrganInfo::from (*ctx.liveOrgan, ctx.registrationTimeline) : OrganInfo {};
     info.colourManuals = ctx.colourManuals;
+    info.staffPerManual = ctx.staffPerManual;
     return info;
 }
 

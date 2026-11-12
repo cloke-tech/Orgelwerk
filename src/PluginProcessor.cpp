@@ -494,6 +494,7 @@ void OrgelProcessor::reengrave (bool evenIfNotShown)
     }
     auto info = Formats::OrganInfo::from (organ, std::move (reg));
     info.colourManuals = colourManuals;
+    info.staffPerManual = staffPerManual;
     std::weak_ptr<int> token = alive;
     pool.addJob ([this, p, pedal, map, info, token] {
         juce::String error;
@@ -670,6 +671,7 @@ Formats::ExportContext OrgelProcessor::makeExportContext() const
     if (applyFileRegistration)
         ctx.registrationTimeline = timeline;
     ctx.colourManuals = colourManuals;
+    ctx.staffPerManual = staffPerManual;
     if (auto p = getPiece())
         for (auto& m : getMarks())
             ctx.registrationMarks.push_back ({ p->score->beatToSeconds (m.beat), m.combination });
@@ -692,6 +694,7 @@ void OrgelProcessor::getStateInformation (juce::MemoryBlock& destData)
     root.setAttribute ("partDivision", map.joinIntoString (","));
     root.setAttribute ("applyRegistration", applyFileRegistration);
     root.setAttribute ("colourManuals", colourManuals);
+    root.setAttribute ("staffPerManual", staffPerManual);
     root.setAttribute ("hostSync", hostSync);
     root.setAttribute ("speed", (double) player.speed.load());
     for (int i = 0; i < numCombinations; ++i)
@@ -722,6 +725,7 @@ void OrgelProcessor::setStateInformation (const void* data, int sizeInBytes)
         organ.fromXml (*o);
     applyFileRegistration = xml->getBoolAttribute ("applyRegistration", true);
     colourManuals = xml->getBoolAttribute ("colourManuals", false);
+    staffPerManual = xml->getBoolAttribute ("staffPerManual", true);
     hostSync = xml->getBoolAttribute ("hostSync", false);
     player.speed = (float) xml->getDoubleAttribute ("speed", 1.0);
     for (int i = 0; i < numCombinations; ++i)

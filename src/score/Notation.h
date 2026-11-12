@@ -29,11 +29,17 @@ public:
     bool loadData (const juce::String& data, const juce::String& format, juce::String& error);
     bool loadFile (const juce::File& file, juce::String& error);
     void setLayout (int pageWidth, int pageHeight, int scale);
+    // true: staves with nothing to play are left out of a line (a staff per manual);
+    // false: every staff in every line (the classic organ layout). Set before loading.
+    // (not called: Verovio's own choice, for notation files)
+    void setHideEmptyStaves (bool hide) { hideEmptyStaves = hide ? 1 : 0; }
 
     int getPageCount() const { return (int) pages.size(); }
     juce::String getPageSVG (int page) const; // 0-based, preprocessed for JUCE
     juce::String getRawPageSVG (int page) const;
     int pageOfElement (const juce::String& id) const;
+    // ids of the systems (lines of staves) on a page, top to bottom
+    std::vector<juce::String> getSystemIds (int page) const;
     const std::vector<TimeEntry>& getTimemap() const { return timemap; }
     bool isLoaded() const { return ! pages.empty(); }
 
@@ -57,10 +63,12 @@ private:
 
     std::unique_ptr<vrv::Toolkit> tk;
     std::vector<juce::String> pages;
+    std::vector<std::vector<juce::String>> systemIds;
     std::vector<TimeEntry> timemap;
     std::map<juce::String, int> notePage;
     juce::String title;
     int pageWidth = 2100, pageHeight = 2970, scale = 40;
+    int hideEmptyStaves = -1;
     juce::String lastData, lastFormat;
     mutable std::recursive_mutex mutex;
 };

@@ -48,7 +48,8 @@ namespace
     struct QStaff
     {
         bool bass = false;
-        int part = 0; // 0 = manuals, 1 = pedal
+        int part = 0; // index into QScore::parts
+        bool pedal = false;
         int numVoices = 1;
         std::vector<char> clefBass; // per measure: bass clef (else treble)
         std::vector<std::vector<std::vector<QEvent>>> voices; // [voice][measure] -> events
@@ -61,6 +62,22 @@ namespace
         std::vector<QStaff> staves;
         bool hasPedal = false;
         int manualsUsed = 0;
+        // the parts: one for all manuals (or one per manual), then the pedal
+        struct QPart
+        {
+            juce::String name, abbreviation;
+            bool pedal = false;
+            int division = -1; // the manual of a part per manual
+        };
+        std::vector<QPart> parts;
+        bool perManual = false;
+        int partOf (int division, bool pedal) const
+        {
+            for (int p = 0; p < (int) parts.size(); ++p)
+                if (pedal ? parts[(size_t) p].pedal : (! parts[(size_t) p].pedal && (! perManual || parts[(size_t) p].division == division)))
+                    return p;
+            return 0;
+        }
         double firstTempo = 120;
     };
 
@@ -479,12 +496,40 @@ namespace
         }
         const int totalUnits = q.measures.empty() ? 0 : q.measures.back().start + q.measures.back().length;
 
-        // staves: grand staff for manuals, one staff for the pedal
+        // Parts: the manuals on a grand staff (all together, or one grand staff per manual when
+        // asked for: each manual then has its own staves, shown only where it plays), and the
+        // pedal on one staff. Manuals in console order from the top: III, II, I.
+        std::vector<int> manualGroups; // divisions with their own part, top to bottom
+        {
+            std::set<int> manuals;
+            for (int i = 0; i < (int) score.notes.size(); ++i)
+            {
+                const int p = score.notes[(size_t) i].part;
+                if (! written[(size_t) i] || (p < (int) opt.partIsPedal.size() && opt.partIsPedal[(size_t) p]))
+                    continue;
+                manuals.insert (p < (int) opt.partDivision.size() ? opt.partDivision[(size_t) p] : 0);
+            }
+            q.manualsUsed = (int) manuals.size();
+            q.perManual = opt.staffPerManual && manuals.size() > 1;
+            if (q.perManual)
+                manualGroups.assign (manuals.rbegin(), manuals.rend());
+            else
+                manualGroups.push_back (-1);
+        }
+        auto groupOf = [&] (int division) {
+            for (int g = 0; g < (int) manualGroups.size(); ++g)
+                if (manualGroups[(size_t) g] == division || manualGroups[(size_t) g] == -1)
+                    return g;
+            return 0;
+        };
+        const int groups = (int) manualGroups.size();
+        const int pedalStaff = 2 * groups;
+
         // Hands: notes that start together are split between right and left hand so that
         // each hand stays near where it was and neither has to stretch further than a tenth.
         std::vector<int> staffOf (score.notes.size(), 0);
         {
-            std::map<int, std::vector<int>> onsets; // quantised start -> manual notes
+            std::map<std::pair<int, int>, std::vector<int>> onsets; // (group, quantised start) -> manual notes
             for (int i = 0; i < (int) score.notes.size(); ++i)
             {
                 auto& n = score.notes[(size_t) i];
@@ -493,15 +538,18 @@ namespace
                 const bool pedal = n.part < (int) opt.partIsPedal.size() && opt.partIsPedal[(size_t) n.part];
                 if (pedal)
                 {
-                    staffOf[(size_t) i] = 2;
+                    staffOf[(size_t) i] = pedalStaff;
                     q.hasPedal = true;
                 }
                 else
-                    onsets[qStart[(size_t) i]].push_back (i);
+                    onsets[{ groupOf (n.part < (int) opt.partDivision.size() ? opt.partDivision[(size_t) n.part] : 0), qStart[(size_t) i] }].push_back (i);
             }
-            double right = 67, left = 50;
-            for (auto& [t, idx] : onsets)
+            std::vector<double> rightOf ((size_t) groups, 67.0), leftOf ((size_t) groups, 50.0);
+            for (auto& [gt, idx] : onsets)
             {
+                const int g = gt.first;
+                double& right = rightOf[(size_t) g];
+                double& left = leftOf[(size_t) g];
                 std::sort (idx.begin(), idx.end(), [&] (int a, int b) { return score.notes[(size_t) a].key < score.notes[(size_t) b].key; });
                 const int n = (int) idx.size();
                 auto key = [&] (int k) { return score.notes[(size_t) idx[(size_t) k]].key; };
@@ -545,7 +593,7 @@ namespace
                 double lm = 0, rm = 0;
                 for (int k = 0; k < n; ++k)
                 {
-                    staffOf[(size_t) idx[(size_t) k]] = k < bestSplit ? 1 : 0;
+                    staffOf[(size_t) idx[(size_t) k]] = 2 * g + (k < bestSplit ? 1 : 0);
                     (k < bestSplit ? lm : rm) += key (k);
                 }
                 if (bestSplit > 0) left = 0.6 * left + 0.4 * (lm / bestSplit);
@@ -561,7 +609,7 @@ namespace
         {
             std::map<std::pair<int, int>, std::vector<int>> pedalAt; // (start, end) -> notes
             for (int i = 0; i < (int) score.notes.size(); ++i)
-                if (staffOf[(size_t) i] == 2 && written[(size_t) i])
+                if (staffOf[(size_t) i] == pedalStaff && written[(size_t) i])
                 {
                     pedalAt[{ qStart[(size_t) i], qEnd[(size_t) i] }].push_back (i);
                 }
@@ -572,25 +620,39 @@ namespace
                             && score.notes[(size_t) b].key == score.notes[(size_t) a].key - 12)
                             hidden[(size_t) b] = true;
         }
-        std::array<std::vector<std::pair<int, int>>, 3> staffNotes; // per staff: (index into score.notes, key)
+        const int numStaves = q.hasPedal ? pedalStaff + 1 : pedalStaff;
+        std::vector<std::vector<std::pair<int, int>>> staffNotes ((size_t) numStaves); // per staff: (index into score.notes, key)
         for (int i = 0; i < (int) score.notes.size(); ++i)
             if (! hidden[(size_t) i] && written[(size_t) i])
                 staffNotes[(size_t) staffOf[(size_t) i]].push_back ({ i, score.notes[(size_t) i].key });
 
+        for (int g = 0; g < groups; ++g)
         {
-            std::set<int> manuals;
-            for (int p = 0; p < (int) score.parts.size(); ++p)
-                if (p < (int) opt.partDivision.size() && opt.partDivision[(size_t) p] >= 0
-                    && ! (p < (int) opt.partIsPedal.size() && opt.partIsPedal[(size_t) p]))
-                    manuals.insert (opt.partDivision[(size_t) p]);
-            q.manualsUsed = (int) manuals.size();
+            QScore::QPart part;
+            const int d = manualGroups[(size_t) g];
+            part.division = d;
+            if (d < 0)
+            {
+                part.name = opt.manualName;
+                part.abbreviation = "Man.";
+            }
+            else
+            {
+                const auto name = juce::isPositiveAndBelow (d, (int) opt.divisionNames.size()) ? opt.divisionNames[(size_t) d] : juce::String();
+                part.abbreviation = divisionAbbreviation (name, d, false);
+                part.name = name.isNotEmpty() ? romanNumeral (d + 1) + ". " + name : "Manual " + romanNumeral (d + 1);
+            }
+            q.parts.push_back (part);
         }
-        const int numStaves = q.hasPedal ? 3 : 2;
+        if (q.hasPedal)
+            q.parts.push_back ({ opt.pedalName, "Ped.", true, -1 });
+
         for (int s = 0; s < numStaves; ++s)
         {
             QStaff st;
-            st.bass = s > 0;
-            st.part = s == 2 ? 1 : 0;
+            st.pedal = s == pedalStaff;
+            st.bass = st.pedal || s % 2 == 1;
+            st.part = st.pedal ? groups : s / 2;
 
             // chords: same start and end
             // quantise, then close small gaps before the next onset of the same part
@@ -987,7 +1049,7 @@ namespace
                         cs[i].qe = g1;
                 }
             }
-            if (s == 1 || s == 2)
+            if (st.bass)
             {
                 int sum = 0, cnt = 0;
                 for (auto& v : vs)
@@ -1227,7 +1289,7 @@ namespace
                         mean[mi] = 0;
                 st.clefBass.assign (nm, st.bass ? 1 : 0);
                 bool bass = st.bass;
-                if (st.part == 0)
+                if (! st.pedal)
                     for (size_t mi = 0; mi < nm; ++mi)
                     {
                         if (mean[mi] >= 0)
@@ -1473,8 +1535,9 @@ namespace
                     continue;
                 lastMeasure = mi;
                 shown = now;
-                out.push_back ({ mi, juce::jmin (at - q.measures[(size_t) mi].start, q.measures[(size_t) mi].length - 1), pedal ? 1 : 0,
-                                 abbr + " " + text, abbr });
+                // with a part per manual the staff's name already says which division it is
+                out.push_back ({ mi, juce::jmin (at - q.measures[(size_t) mi].start, q.measures[(size_t) mi].length - 1), q.partOf (d, pedal),
+                                 q.perManual ? text : abbr + " " + text, abbr });
             }
         }
         std::stable_sort (out.begin(), out.end(), [] (auto& a, auto& b) { return std::tie (a.measure, a.pos) < std::tie (b.measure, b.pos); });
@@ -1513,15 +1576,29 @@ juce::String toMusicXML (const Score& score, const Options& opt)
         o << "<creator type=\"composer\">" << esc (q.composer) << "</creator>";
     o << "<encoding><software>Orgelwerk</software></encoding></identification>\n";
     o << "  <part-list>\n";
-    if (q.hasPedal)
-        o << "    <part-group type=\"start\" number=\"1\"><group-symbol>none</group-symbol><group-barline>yes</group-barline></part-group>\n";
-    o << "    <score-part id=\"P1\"><part-name>" << esc (opt.manualName) << "</part-name><part-abbreviation>Man.</part-abbreviation></score-part>\n";
-    if (q.hasPedal)
-        o << "    <score-part id=\"P2\"><part-name>" << esc (opt.pedalName) << "</part-name><part-abbreviation>Ped.</part-abbreviation></score-part>\n"
-          << "    <part-group type=\"stop\" number=\"1\"/>\n";
+    const int numParts = (int) q.parts.size();
+    // a part per manual: the whole organ in a bracket (that is also what lets Verovio leave out
+    // staves with nothing to play)
+    if (numParts > 1)
+        o << "    <part-group type=\"start\" number=\"1\"><group-symbol>" << (q.perManual ? "bracket" : "none")
+          << "</group-symbol><group-barline>yes</group-barline></part-group>\n";
+    for (int p = 0; p < numParts; ++p)
+    {
+        // the manuals together under a thin line inside the bracket (Verovio only leaves out
+        // empty staves when a score has more than one group sign)
+        if (q.perManual && p == 0)
+            o << "    <part-group type=\"start\" number=\"2\"><group-symbol>line</group-symbol><group-barline>yes</group-barline></part-group>\n";
+        o << "    <score-part id=\"P" << (p + 1) << "\"><part-name>" << esc (q.parts[(size_t) p].name) << "</part-name><part-abbreviation>"
+          << esc (q.parts[(size_t) p].abbreviation) << "</part-abbreviation></score-part>\n";
+        if (q.perManual && p + 1 < numParts && q.parts[(size_t) p + 1].pedal)
+            o << "    <part-group type=\"stop\" number=\"2\"/>\n";
+        if (q.perManual && p + 1 == numParts && ! q.parts[(size_t) p].pedal)
+            o << "    <part-group type=\"stop\" number=\"2\"/>\n";
+    }
+    if (numParts > 1)
+        o << "    <part-group type=\"stop\" number=\"1\"/>\n";
     o << "  </part-list>\n";
 
-    const int numParts = q.hasPedal ? 2 : 1;
     // Where a hand changes manual, the manual is named at the staff, as organ editions do:
     // a label goes to every note on a manual that was not sounding on this staff just before
     // (a hand moving over, or a second manual joining in). With two manuals on one staff the
@@ -1529,10 +1606,11 @@ juce::String toMusicXML (const Score& score, const Options& opt)
     // With colours on, quick back-and-forth is left to the colours: a label then needs the hand
     // to stay a beat on the new manual, and a beat since the last label.
     std::map<std::tuple<int, int, int, int>, bool> labelAt; // (measure, staff, position, division) -> below the staff
-    if (q.manualsUsed > 1)
+    // (each manual on its own staves: the part names say it all)
+    if (q.manualsUsed > 1 && ! q.perManual)
         for (int k = 0; k < (int) q.staves.size(); ++k)
         {
-            if (q.staves[(size_t) k].part != 0)
+            if (q.staves[(size_t) k].pedal)
                 continue;
             auto& st = q.staves[(size_t) k];
             struct Ev { int abs, mi, start, end, division; bool lower, tied; };
@@ -1712,7 +1790,7 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                             o << "<duration>" << e.dur << "</duration>";
                         };
                         // a hand moves to another manual: say so at the staff, as organ editions do
-                        if (! e.rest && part == 0)
+                        if (! e.rest && ! q.perManual && ! q.parts[(size_t) part].pedal)
                         {
                             std::set<int> divs;
                             for (auto& n : e.notes)
@@ -1728,7 +1806,7 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                                 // the registration printed at this place already names the division
                                 bool named = false, crowded = false;
                                 for (auto& rt : regTexts)
-                                    if (rt.part == 0)
+                                    if (rt.part == part)
                                     {
                                         named |= rt.measure == mi && rt.division == label && std::abs (rt.pos - e.start) < U;
                                         // a registration line above this staff nearby: the label goes under the staff
@@ -1766,7 +1844,7 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                             for (size_t ni = 0; ni < e.notes.size(); ++ni)
                             {
                                 auto& n = e.notes[ni];
-                                const bool colourIt = opt.colourManuals && q.manualsUsed > 1 && part == 0 && n.division > 0;
+                                const bool colourIt = opt.colourManuals && q.manualsUsed > 1 && ! q.parts[(size_t) part].pedal && n.division > 0;
                                 o << "      <note" << (colourIt ? " color=\"" + manualColour (n.division) + "\"" : juce::String()) << ">"
                                   << (ni > 0 ? "<chord/>" : "") << "<pitch><step>" << juce::String::charToString (stepName[n.step]) << "</step>";
                                 if (n.alter != 0)
@@ -1822,8 +1900,16 @@ juce::String toMusicXML (const Score& score, const Options& opt)
 }
 
 //==============================================================================
-juce::String toABC (const Score& score, const Options& opt)
+// ABC and LilyPond are written on the classic three staves
+static Options classicLayout (Options opt)
 {
+    opt.staffPerManual = false;
+    return opt;
+}
+
+juce::String toABC (const Score& score, const Options& options)
+{
+    const auto opt = classicLayout (options);
     auto q = build (score, opt);
     const auto regTexts = registrationTexts (score, opt, q);
     juce::MemoryOutputStream o;
@@ -1864,7 +1950,7 @@ juce::String toABC (const Score& score, const Options& opt)
         {
             o << "V:S" << (s + 1) << "V" << (v + 1) << " clef=" << (st.bass ? "bass" : "treble");
             if (v == 0)
-                o << " name=\"" << (st.part == 1 ? opt.pedalName : (s == 0 ? opt.manualName : juce::String())) << "\"";
+                o << " name=\"" << (st.pedal ? opt.pedalName : (s == 0 ? opt.manualName : juce::String())) << "\"";
             o << "\n";
             for (int mi = 0; mi < (int) q.measures.size(); ++mi)
             {
@@ -1948,8 +2034,9 @@ juce::String toABC (const Score& score, const Options& opt)
 }
 
 //==============================================================================
-juce::String toLilyPond (const Score& score, const Options& opt)
+juce::String toLilyPond (const Score& score, const Options& options)
 {
+    const auto opt = classicLayout (options);
     auto q = build (score, opt);
     const auto regTexts = registrationTexts (score, opt, q);
     juce::MemoryOutputStream o;

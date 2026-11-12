@@ -19,6 +19,10 @@ namespace NotationBuilder
         // false: black notes, the manual named at every change (as printed organ music);
         // true: notes in their manual's colour as well
         bool colourManuals = false;
+        // true: every manual gets its own grand staff (named after it), the pedal its own staff,
+        // and staves are hidden in lines where they have nothing to play;
+        // false: the classic three staves (right hand, left hand, pedal)
+        bool staffPerManual = false;
         // the registration the file asks for, from a beat on (stop names as printed)
         struct RegistrationMark
         {

@@ -50,6 +50,9 @@ private:
     std::vector<int> shownPages() const;
     int currentPage() const;
     float zoomPageHeight() const;
+    float zoomPageWidth() const;
+    void measureLines();
+    float tallestLine = 0.0f; // the tallest line of staves, as a part of the page height
     float zoomStride() const;
     double maxScroll() const;
     void prunePages (int around);
@@ -62,7 +65,7 @@ private:
     double wheelAccumulated = 0, lastWheelTurn = 0;
     void setHighlight (const juce::String& id, bool on);
     juce::Rectangle<float> viewArea() const;
-    juce::Rectangle<float> elementArea (Page& page, juce::Drawable* d, juce::Rectangle<float> slot) const;
+    static juce::Rectangle<float> elementArea (Page& page, juce::Drawable* d, juce::Rectangle<float> slot);
     bool zoomed = false;
     double scroll = 0.0; // page width: pages scrolled past the top of the view (fractional)
     double scrollTarget = 0.0; // scroll glides towards this

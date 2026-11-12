@@ -107,6 +107,7 @@ public:
     std::vector<bool> partIsPedal() const;
     bool applyFileRegistration = true;
     bool colourManuals = false; // notes in their manual's colour (else black, as printed)
+    bool staffPerManual = true; // own staves per manual, shown where it plays (else the classic three)
     void applyPieceRegistration();
     bool hostSync = false;
 

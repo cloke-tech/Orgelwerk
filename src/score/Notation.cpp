@@ -151,6 +151,14 @@ void Notation::applyOptions()
     opts->setProperty ("spacingStaff", 10);
     opts->setProperty ("spacingSystem", 14);
     opts->setProperty ("svgViewBox", true);
+    if (hideEmptyStaves >= 0)
+    {
+        opts->setProperty ("condense", hideEmptyStaves != 0 ? "auto" : "none");
+        opts->setProperty ("condenseFirstPage", hideEmptyStaves != 0);
+        // (despite its name, "true" would keep every staff in bars with a tempo, and MIDI
+        // files change tempo in almost every bar)
+        opts->setProperty ("condenseTempoPages", false);
+    }
     opts->setProperty ("pageMarginLeft", 80);
     opts->setProperty ("pageMarginRight", 80);
     opts->setProperty ("pageMarginTop", 80);
@@ -170,6 +178,7 @@ void Notation::renderAll (bool relayout)
 
     pages.clear();
     notePage.clear();
+    systemIds.clear();
     const int count = t.GetPageCount();
     for (int p = 1; p <= count; ++p)
     {
@@ -190,6 +199,20 @@ void Notation::renderAll (bool relayout)
             if (idEnd != std::string::npos && idEnd > idPos + 4 && idEnd < tagEnd)
                 notePage[juce::String (juce::CharPointer_UTF8 (raw.c_str() + idPos + 4), juce::CharPointer_UTF8 (raw.c_str() + idEnd))] = p - 1;
         }
+        // the systems: <g id="..." class="system">
+        std::vector<juce::String> systems;
+        static const std::string systemMarker = "class=\"system\"";
+        for (size_t idx = raw.find (systemMarker); idx != std::string::npos; idx = raw.find (systemMarker, idx + systemMarker.size()))
+        {
+            const size_t tagStart = raw.rfind ('<', idx);
+            const size_t idPos = tagStart == std::string::npos ? std::string::npos : raw.find ("id=\"", tagStart);
+            if (idPos == std::string::npos || idPos > idx)
+                continue;
+            const size_t idEnd = raw.find ('"', idPos + 4);
+            if (idEnd != std::string::npos && idEnd < idx)
+                systems.push_back (juce::String (juce::CharPointer_UTF8 (raw.c_str() + idPos + 4), juce::CharPointer_UTF8 (raw.c_str() + idEnd)));
+        }
+        systemIds.push_back (std::move (systems));
         juce::String svg (juce::CharPointer_UTF8 (raw.c_str()));
         pages.push_back (svg);
     }
@@ -222,6 +245,12 @@ juce::String Notation::getRawPageSVG (int page) const
 juce::String Notation::getPageSVG (int page) const
 {
     return inlineSymbols (getRawPageSVG (page));
+}
+
+std::vector<juce::String> Notation::getSystemIds (int page) const
+{
+    std::lock_guard<std::recursive_mutex> g (mutex);
+    return juce::isPositiveAndBelow (page, (int) systemIds.size()) ? systemIds[(size_t) page] : std::vector<juce::String>();
 }
 
 int Notation::pageOfElement (const juce::String& id) const
