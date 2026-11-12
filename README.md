@@ -30,6 +30,9 @@ SF2-SoundFont (eingebaut: **Jeux14**), die Noten stehen auf dem Notenpult in der
 - **Stimmen**: legt fest, welche Stimme des Stücks auf welchem Manual/Pedal spielt.
   Verdoppelte Kanäle in Orgel-MIDI-Dateien (ein Kanal pro Register) werden erkannt und als
   Registrierung gezogen; Programmwechsel mitten im Stück wechseln die Register dieses Werks.
+- **Automatische Grundregistrierung**: spielt eine Stimme des Stücks auf einem Werk ohne
+  gezogenes Register, zieht Orgelwerk dort Prinzipal 8′ + 4′ (Pedal 16′ + 8′), damit keine
+  Stimme stumm bleibt (abschaltbar im Menü „Wiedergabe“).
 - **Registrierspur**: Registrierung an beliebigen Stellen merken (Knopf „Registrierspur“ oder
   Taste `R`). Beim Abspielen und im Audio-Export wird dort sample-genau umgeregistriert; die
   Stellen erscheinen als goldene Marken auf der Zeitleiste und werden mit gespeichert.

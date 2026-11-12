@@ -108,6 +108,9 @@ public:
     bool applyFileRegistration = true;
     bool colourManuals = false; // notes in their manual's colour (else black, as printed)
     bool staffPerManual = true; // own staves per manual, shown where it plays (else the classic three)
+    bool autoRegister = true;   // a division the piece plays on but with no stop drawn gets a basic registration
+    // draws a basic registration on every division the piece plays on that has nothing drawn
+    void fillSilentDivisions();
     void applyPieceRegistration();
     bool hostSync = false;
 

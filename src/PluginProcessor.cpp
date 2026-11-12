@@ -301,7 +301,13 @@ void OrgelProcessor::timerCallback()
     const auto scope = regFifo.read (regFifo.getNumReady());
     auto apply = [this] (int r) {
         if (applyFileRegistration && r < (int) timeline.size())
-            organ.applyRegistration (timeline[(size_t) r].division, timeline[(size_t) r].registration);
+        {
+            const int d = timeline[(size_t) r].division;
+            organ.applyRegistration (d, timeline[(size_t) r].registration);
+            // the file left this division with nothing that sounds
+            if (autoRegister && ! organ.hasStopOn (d))
+                organ.drawBasicRegistration (d);
+        }
     };
     for (int i = 0; i < scope.blockSize1; ++i) apply (regBuffer[(size_t) (scope.startIndex1 + i)]);
     for (int i = 0; i < scope.blockSize2; ++i) apply (regBuffer[(size_t) (scope.startIndex2 + i)]);
@@ -408,6 +414,7 @@ void OrgelProcessor::setPiece (std::shared_ptr<Piece> p)
     compileTimeline();
     if (applyFileRegistration)
         applyPieceRegistration();
+    fillSilentDivisions();
     sendChangeMessage();
 }
 
@@ -456,6 +463,7 @@ void OrgelProcessor::setPartDivision (int part, int division)
         player.setPartDivision (partDivision);
     }
     compileTimeline();
+    fillSilentDivisions();
     reengrave();
     sendChangeMessage();
 }
@@ -615,11 +623,27 @@ void OrgelProcessor::applyMarkAtPosition()
         organ.recallCombination (combo);
 }
 
+// A voice of the piece on a division with no stop drawn would stay silent: such a division
+// gets a basic registration (principal 8' + 4', pedal 16' + 8').
+void OrgelProcessor::fillSilentDivisions()
+{
+    if (! autoRegister || getPiece() == nullptr)
+        return;
+    std::set<int> used;
+    for (int d : partDivision)
+        if (d >= 0 && d < organ.getNumDivisions())
+            used.insert (d);
+    for (int d : used)
+        if (! organ.hasStopOn (d))
+            organ.drawBasicRegistration (d);
+}
+
 void OrgelProcessor::play()
 {
     if (applyFileRegistration)
         applyFileRegistrationAt (getCurrentBeat());
     applyMarkAtPosition();
+    fillSilentDivisions();
     const juce::ScopedLock sl (organ.getLock());
     if (player.hasScore())
         player.play();
@@ -695,6 +719,7 @@ void OrgelProcessor::getStateInformation (juce::MemoryBlock& destData)
     root.setAttribute ("applyRegistration", applyFileRegistration);
     root.setAttribute ("colourManuals", colourManuals);
     root.setAttribute ("staffPerManual", staffPerManual);
+    root.setAttribute ("autoRegister", autoRegister);
     root.setAttribute ("hostSync", hostSync);
     root.setAttribute ("speed", (double) player.speed.load());
     for (int i = 0; i < numCombinations; ++i)
@@ -726,6 +751,7 @@ void OrgelProcessor::setStateInformation (const void* data, int sizeInBytes)
     applyFileRegistration = xml->getBoolAttribute ("applyRegistration", true);
     colourManuals = xml->getBoolAttribute ("colourManuals", false);
     staffPerManual = xml->getBoolAttribute ("staffPerManual", true);
+    autoRegister = xml->getBoolAttribute ("autoRegister", true);
     hostSync = xml->getBoolAttribute ("hostSync", false);
     player.speed = (float) xml->getDoubleAttribute ("speed", 1.0);
     for (int i = 0; i < numCombinations; ++i)

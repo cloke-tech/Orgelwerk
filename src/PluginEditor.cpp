@@ -1089,6 +1089,7 @@ juce::PopupMenu OrgelEditor::getMenuForIndex (int index, const juce::String&)
         m.addItem (item (15, juce::String::fromUTF8 ("Registrierspur löschen"), {}, ! proc.getMarks().empty()));
         m.addSeparator();
         m.addItem (item (16, "Registrierung aus der Datei beim Laden ziehen", {}, true, proc.applyFileRegistration));
+        m.addItem (item (17, "Werke ohne Register automatisch registrieren", {}, true, proc.autoRegister));
     }
     else if (index == 2)
     {
@@ -1150,6 +1151,7 @@ void OrgelEditor::menuItemSelected (int id, int)
         case 14: proc.addMarkHere(); break;
         case 15: proc.clearMarks(); break;
         case 16: proc.applyFileRegistration = ! proc.applyFileRegistration; proc.reengrave(); break;
+        case 17: proc.autoRegister = ! proc.autoRegister; proc.fillSilentDivisions(); break;
         case 20: proc.organ.addManual(); break;
         case 21: proc.organ.clearRegistration(); break;
         case 22: proc.organ.setSpatial (! proc.organ.spatial); break;
@@ -1245,6 +1247,7 @@ void OrgelEditor::showOptionsMenu()
     m.addSubMenu ("Transposition", transpose);
     m.addItem (6, juce::String::fromUTF8 ("Pfeifen räumlich aufstellen (Werke im Raum, C/Cis-Seiten)"), true, proc.organ.spatial);
     m.addItem (8, "Eigene Notensysteme je Manual", true, proc.staffPerManual);
+    m.addItem (9, "Werke ohne Register automatisch registrieren", true, proc.autoRegister);
     m.addItem (7, "Manuale in den Noten farbig", true, proc.colourManuals);
     m.addSeparator();
     m.addItem (4, juce::String::fromUTF8 ("Orgel auf Standard zurücksetzen"));
@@ -1269,6 +1272,11 @@ void OrgelEditor::showOptionsMenu()
             proc.organ.setSpatial (! proc.organ.spatial);
         if (r == 7)
             toggleManualColours();
+        if (r == 9)
+        {
+            proc.autoRegister = ! proc.autoRegister;
+            proc.fillSilentDivisions();
+        }
         if (r == 8)
         {
             proc.staffPerManual = ! proc.staffPerManual;

@@ -652,6 +652,84 @@ void OrganEngine::toggleStop (int d, int s)
     setStop (d, s, now);
 }
 
+bool OrganEngine::hasStopOn (int d) const
+{
+    const juce::ScopedLock sl (lock);
+    if (d < 0 || d >= (int) divisions.size())
+        return false;
+    for (auto& st : divisions[(size_t) d].stops)
+        if (st.on)
+            return true;
+    return false;
+}
+
+// the pitch of a stop in feet from its name ("Montre 8", "Principal (ped.)16"), moved by its octave
+static double footageOf (const Stop& st)
+{
+    const auto& n = st.name;
+    for (int i = 0; i < n.length(); ++i)
+        if (juce::CharacterFunctions::isDigit (n[i]))
+        {
+            int v = 0;
+            while (i < n.length() && juce::CharacterFunctions::isDigit (n[i]))
+                v = v * 10 + (n[i++] - '0');
+            return v * std::pow (2.0, -st.octave);
+        }
+    return 8.0 * std::pow (2.0, -st.octave); // no number in the name ("Flute harmonique"): an 8'
+}
+
+bool OrganEngine::drawBasicRegistration (int d)
+{
+    std::vector<int> chosen;
+    {
+        const juce::ScopedLock sl (lock);
+        if (d < 0 || d >= (int) divisions.size() || divisions[(size_t) d].stops.empty())
+            return false;
+        auto& stops = divisions[(size_t) d].stops;
+        const bool pedal = divisions[(size_t) d].pedal;
+        auto score = [&] (const Stop& st, double feet) {
+            if (std::abs (footageOf (st) - feet) > 0.01)
+                return -1;
+            const auto family = classifyStop (st.name);
+            if (st.name.containsIgnoreCase ("Tutti") || st.name.containsIgnoreCase ("Celeste") || st.name.containsIgnoreCase ("+"))
+                return -1;
+            if (family == StopFamily::Principal)
+                return 3;
+            if (family == StopFamily::Flute)
+                return pedal ? 3 : 2; // Subbass, Bourdon: the pedal's usual foundation
+            if (family == StopFamily::String)
+                return 1;
+            return -1; // no reeds, mixtures or bells as a basic registration
+        };
+        for (double feet : pedal ? std::initializer_list<double> { 16.0, 8.0 } : std::initializer_list<double> { 8.0, 4.0 })
+        {
+            int best = -1, bestScore = 0;
+            for (int s = 0; s < (int) stops.size(); ++s)
+                if (const int sc = score (stops[(size_t) s], feet); sc > bestScore)
+                {
+                    bestScore = sc;
+                    best = s;
+                }
+            if (best >= 0)
+                chosen.push_back (best);
+        }
+        if (chosen.empty())
+        {
+            for (int s = 0; s < (int) stops.size() && chosen.empty(); ++s)
+            {
+                const auto family = classifyStop (stops[(size_t) s].name);
+                if (family == StopFamily::Principal || family == StopFamily::Flute)
+                    chosen.push_back (s);
+            }
+            if (chosen.empty())
+                chosen.push_back (0);
+        }
+    }
+    for (int s : chosen)
+        setStop (d, s, true);
+    return true;
+}
+
 void OrganEngine::removeTemporaryStops()
 {
     bool any = false;

@@ -56,6 +56,11 @@ public:
     void toggleStop (int d, int s);
     // removes the stops that pieces brought along (see Stop::temporary)
     void removeTemporaryStops();
+    bool hasStopOn (int d) const;
+    // A basic registration for a division that has nothing drawn: principal 8' + 4' on a
+    // manual, 16' + 8' in the pedal (flutes if there are no principals, else the first stop).
+    // Returns false if nothing could be drawn (no stops at all).
+    bool drawBasicRegistration (int d);
     void setCoupler (int c, bool on);
     void setDivisionVolume (int d, float v);
     void setDivisionExpression (int d, float v);

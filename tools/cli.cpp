@@ -93,6 +93,17 @@ int main (int argc, char** argv)
             restoredCount += (int) restored.getDivision (d).stops.size();
         std::cout << "  stops: " << before << " before, " << during << " with the piece, " << count() << " after the next piece, "
                   << restoredCount << " after the next piece from old settings\n";
+        // basic registration for divisions with nothing drawn
+        organ.clearRegistration();
+        for (int d = 0; d < organ.getNumDivisions(); ++d)
+        {
+            organ.drawBasicRegistration (d);
+            juce::StringArray on;
+            for (auto& st : organ.getDivision (d).stops)
+                if (st.on)
+                    on.add (st.name);
+            std::cout << "  basic " << organ.getDivision (d).name << ": " << on.joinIntoString (", ") << "\n";
+        }
         return count() == before && restoredCount == before ? 0 : 5;
     }
     if (cmd == "export")
