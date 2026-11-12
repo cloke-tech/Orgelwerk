@@ -8,7 +8,7 @@ namespace orgel::NotationBuilder
 {
 namespace
 {
-    constexpr int U = 8; // grid units per quarter note (32nd notes)
+    constexpr int U = 24; // grid units per quarter note: 32nd notes (3) and triplets (8, 4)
 
     struct QNote
     {
@@ -22,7 +22,8 @@ namespace
     {
         int start = 0, dur = 0; // relative to measure start
         bool rest = false;
-        int typeUnits = 8, dots = 0;
+        int typeUnits = U, dots = 0;
+        bool triplet = false, tupletStart = false, tupletStop = false;
         std::vector<QNote> notes;
         int beam = 0; // 0 none, 1 begin, 2 continue, 3 end
         int stem = 0; // 0 auto, 1 up, 2 down
@@ -32,7 +33,7 @@ namespace
 
     struct QMeasure
     {
-        int start = 0, length = 32;
+        int start = 0, length = 4 * U;
         int num = 4, den = 4;
         int fifths = 0;
         bool minor = false;
@@ -45,6 +46,7 @@ namespace
         bool bass = false;
         int part = 0; // 0 = manuals, 1 = pedal
         int numVoices = 1;
+        std::vector<char> clefBass; // per measure: bass clef (else treble)
         std::vector<std::vector<std::vector<QEvent>>> voices; // [voice][measure] -> events
     };
 
@@ -105,35 +107,92 @@ namespace
     struct Value
     {
         int units, typeUnits, dots;
+        bool triplet = false;
     };
-    const Value values[] = { { 32, 32, 0 }, { 24, 16, 1 }, { 16, 16, 0 }, { 12, 8, 1 }, { 8, 8, 0 },
-                             { 6, 4, 1 }, { 4, 4, 0 }, { 3, 2, 1 }, { 2, 2, 0 }, { 1, 1, 0 } };
+    const Value values[] = { { 4 * U, 4 * U, 0 }, { 3 * U, 2 * U, 1 }, { 2 * U, 2 * U, 0 }, { 3 * U / 2, U, 1 }, { U, U, 0 },
+                             { 3 * U / 4, U / 2, 1 }, { U / 2, U / 2, 0 }, { 3 * U / 8, U / 4, 1 }, { U / 4, U / 4, 0 }, { U / 8, U / 8, 0 } };
+    // triplet values (three in the time of two), written inside one beat
+    const Value tripletValues[] = { { 2 * U / 3, U, 0, true }, { U / 3, U / 2, 0, true }, { U / 6, U / 4, 0, true } };
+    using TripletBeats = std::map<int, int>; // beat (absolute, in quarters) -> triplet grid in units
 
-    std::vector<Value> decompose (int pos, int len, const QMeasure& m, bool rest = false)
+    // How a note or rest is written with tied values, following the usual engraving rules:
+    // the longest value that fits is taken from the left, a value starts at most half its
+    // own length off the grid (8th-quarter-8th, 16th-dotted 8th), only notes starting on a
+    // beat may hold over the middle of a 4/4 bar, and rests never hold over a beat.
+    std::vector<Value> decompose (int pos, int len, const QMeasure& m, const TripletBeats& triplets, bool rest = false)
     {
         const bool compound = m.den == 8 && m.num % 3 == 0 && m.num > 3;
+        const int beat = compound ? 3 * U / 2 : juce::jmax (1, 4 * U / juce::jmax (1, m.den));
+        const int nominal = m.num * 4 * U / juce::jmax (1, m.den);
+        // inside a triplet beat (not on its start)?
+        auto tripletGrid = [&] (int p) {
+            const int a = m.start + p;
+            auto it = triplets.find (a / U);
+            return it == triplets.end() ? 0 : it->second;
+        };
+        auto insideTriplet = [&] (int p) { return (m.start + p) % U != 0 && tripletGrid (p) > 0; };
+        int halfBar = 0;
+        if (m.length == nominal)
+        {
+            if (! compound && m.num % 2 == 0 && m.num >= 4)
+                halfBar = m.length / 2;
+            else if (compound && m.num == 12)
+                halfBar = 3 * U;
+        }
+        auto crosses = [] (int s, int e, int grid) { return grid > 0 && (s / grid) != ((e - 1) / grid); };
+        auto fits = [&] (int s, int l, const Value& v) {
+            if (v.units != l || (v.units == 4 * U && m.length != 4 * U))
+                return false;
+            const int e = s + l;
+            if (insideTriplet (s) || insideTriplet (e))
+                return false;
+            if (rest)
+            {
+                if (v.dots > 0 && ! (compound && v.units == 3 * U / 2))
+                    return false;
+                if (s % juce::jmin (v.units, beat * 2) != 0)
+                    return false;
+                if (s % beat != 0 && crosses (s, e, beat))
+                    return false;
+                return ! (halfBar > 0 && s % halfBar != 0 && crosses (s, e, halfBar));
+            }
+            const int align = juce::jmax (1, v.dots ? v.typeUnits / 2 : v.units / 2);
+            if (s % align != 0)
+                return false;
+            if (s % beat != 0 && crosses (s, e, beat))
+            {
+                if (compound || s % juce::jmax (1, beat / 2) != 0)
+                    return false;
+            }
+            return ! (halfBar > 0 && s % beat != 0 && crosses (s, e, halfBar));
+        };
         std::vector<Value> out;
         while (len > 0)
         {
-            const Value* chosen = &values[9];
-            for (auto& v : values)
+            const Value* chosen = nullptr;
+            for (int l = len; l >= 1 && chosen == nullptr; --l)
+                for (auto& v : values)
+                    if (fits (pos, l, v))
+                    {
+                        chosen = &v;
+                        break;
+                    }
+            if (chosen == nullptr && tripletGrid (pos) > 0)
             {
-                if (v.units > len || (rest && v.dots > 0 && ! (m.den == 8 && v.units == 12)))
-                    continue;
-                int align = v.typeUnits;
-                if (compound && v.units == 12)
-                    align = 12;
-                if (v.units == 32 && m.length != 32)
-                    continue;
-                if (pos % align == 0)
-                {
-                    chosen = &v;
-                    break;
-                }
+                // a piece of a triplet beat: triplet values up to the end of the beat
+                const int a = m.start + pos;
+                const int room = juce::jmin (len, (a / U + 1) * U - a);
+                for (auto& v : tripletValues)
+                    if (v.units <= room && (a % U) % v.units == 0)
+                    {
+                        chosen = &v;
+                        break;
+                    }
             }
-            out.push_back (*chosen);
-            pos += chosen->units;
-            len -= chosen->units;
+            Value piece = chosen != nullptr ? *chosen : Value { juce::jmin (len, U / 8), U / 8, 0 };
+            out.push_back (piece);
+            pos += piece.units;
+            len -= piece.units;
         }
         return out;
     }
@@ -152,10 +211,116 @@ namespace
         q.composer = score.composer;
         q.firstTempo = score.tempos.empty() ? 120.0 : score.tempos.front().bpm;
 
-        int endUnits = 0;
-        for (auto& n : score.notes)
-            endUnits = juce::jmax (endUnits, (int) std::round ((n.start + n.length) * U));
-        endUnits = juce::jmax (endUnits, 1);
+        // Which notes are written: drum tracks and parts that are switched off are not.
+        std::vector<bool> written (score.notes.size(), true);
+        for (size_t i = 0; i < score.notes.size(); ++i)
+        {
+            const int p = score.notes[i].part;
+            if (p >= 0 && p < (int) score.parts.size() && score.parts[(size_t) p].drums)
+                written[i] = false;
+            if (p >= 0 && p < (int) opt.partDivision.size() && opt.partDivision[(size_t) p] < 0)
+                written[i] = false;
+        }
+
+        // Quantisation of performed notes.
+        // 1. Chord tones played slightly apart (rolled, or just not exactly together) start
+        //    together: onsets that follow each other within 0.07 beats form one onset.
+        // 2. Each beat gets the coarsest grid its onsets allow: a 16th grid unless the beat
+        //    really moves in 32nds.
+        // 3. Note ends are rounded more coarsely the longer the note is: a held chord that
+        //    is let go a bit early or late still ends on the beat.
+        std::vector<double> start (score.notes.size()), end (score.notes.size());
+        std::vector<int> qStart (score.notes.size(), 0), qEnd (score.notes.size(), 0);
+        TripletBeats triplets;
+        {
+            std::vector<int> order;
+            for (int i = 0; i < (int) score.notes.size(); ++i)
+            {
+                start[(size_t) i] = score.notes[(size_t) i].start;
+                end[(size_t) i] = score.notes[(size_t) i].start + score.notes[(size_t) i].length;
+                if (written[(size_t) i])
+                    order.push_back (i);
+            }
+            std::sort (order.begin(), order.end(), [&] (int a, int b) { return start[(size_t) a] < start[(size_t) b]; });
+            auto offGrid = [] (double t, double perBeat) { return std::abs (t * perBeat - std::round (t * perBeat)) / perBeat; };
+            for (size_t i = 0; i < order.size();)
+            {
+                size_t j = i + 1;
+                while (j < order.size() && start[(size_t) order[j]] - start[(size_t) order[j - 1]] <= 0.07
+                       && start[(size_t) order[j]] - start[(size_t) order[i]] <= 0.2)
+                    ++j;
+                if (j - i > 1)
+                {
+                    // the onset nearest to the 16th grid is where the chord was meant to be
+                    double best = start[(size_t) order[i]];
+                    for (size_t k = i; k < j; ++k)
+                        if (offGrid (start[(size_t) order[k]], 4.0) < offGrid (best, 4.0) - 1.0e-6)
+                            best = start[(size_t) order[k]];
+                    for (size_t k = i; k < j; ++k)
+                        start[(size_t) order[k]] = best;
+                }
+                i = j;
+            }
+            // grid per beat: 16ths if the onsets sit near them, 8th triplets (or 16th
+            // triplets) if they sit near thirds, else 32nds
+            std::map<int, std::vector<double>> onsetsInBeat;
+            for (int i : order)
+            {
+                const double t = start[(size_t) i];
+                const int b = (int) std::floor (t + 0.04);
+                auto& v = onsetsInBeat[b];
+                const double f = t - b;
+                if (std::find_if (v.begin(), v.end(), [f] (double x) { return std::abs (x - f) < 0.03; }) == v.end())
+                    v.push_back (f);
+            }
+            std::map<int, int> beatGrid; // beat -> grid in units
+            for (auto& [b, fs] : onsetsInBeat)
+            {
+                double e16 = 0, e8t = 0, e16t = 0;
+                for (double f : fs)
+                {
+                    e16 = juce::jmax (e16, offGrid (f, 4.0));
+                    e8t = juce::jmax (e8t, offGrid (f, 3.0));
+                    e16t = juce::jmax (e16t, offGrid (f, 6.0));
+                }
+                int g = U / 4;
+                if (e16 > 0.08)
+                {
+                    g = U / 8;
+                    if (fs.size() >= 2 && e8t <= 0.05)
+                        g = U / 3;
+                    else if (fs.size() >= 3 && e16t <= 0.03)
+                        g = U / 6;
+                }
+                beatGrid[b] = g;
+                if (g == U / 3 || g == U / 6)
+                    triplets[b] = g;
+            }
+            auto gridAt = [&] (double t) {
+                auto it = beatGrid.find ((int) std::floor (t + 0.04));
+                return it == beatGrid.end() ? U / 4 : it->second;
+            };
+            for (int i : order)
+            {
+                const int g = gridAt (start[(size_t) i]);
+                const int qs = juce::jmax (0, (int) std::round (start[(size_t) i] * U / g) * g);
+                const double lenU = (end[(size_t) i] - start[(size_t) i]) * U;
+                const int eg = lenU >= 6 * U ? U : lenU >= 3 * U ? U / 2 : lenU >= 3 * U / 4 ? U / 4 : gridAt (end[(size_t) i]);
+                int qe = (int) std::round (end[(size_t) i] * U / eg) * eg;
+                // an end inside a triplet beat sits on that beat's triplet grid
+                if (qe % U != 0)
+                    if (auto it = triplets.find (qe / U); it != triplets.end())
+                        qe = (int) std::round (qe / (double) it->second) * it->second;
+                qe = juce::jmax (qe, qs + g);
+                qStart[(size_t) i] = qs;
+                qEnd[(size_t) i] = qe;
+            }
+        }
+
+        int endUnits = 1;
+        for (size_t i = 0; i < score.notes.size(); ++i)
+            if (written[i])
+                endUnits = juce::jmax (endUnits, qEnd[i]);
 
         // measures from the time signatures
         {
@@ -219,6 +384,8 @@ namespace
             for (int i = 0; i < (int) score.notes.size(); ++i)
             {
                 auto& n = score.notes[(size_t) i];
+                if (! written[(size_t) i])
+                    continue;
                 const bool pedal = n.part < (int) opt.partIsPedal.size() && opt.partIsPedal[(size_t) n.part];
                 if (pedal)
                 {
@@ -226,7 +393,7 @@ namespace
                     q.hasPedal = true;
                 }
                 else
-                    onsets[(int) std::round (n.start * U)].push_back (i);
+                    onsets[qStart[(size_t) i]].push_back (i);
             }
             double right = 67, left = 50;
             for (auto& [t, idx] : onsets)
@@ -290,10 +457,9 @@ namespace
         {
             std::map<std::pair<int, int>, std::vector<int>> pedalAt; // (start, end) -> notes
             for (int i = 0; i < (int) score.notes.size(); ++i)
-                if (staffOf[(size_t) i] == 2)
+                if (staffOf[(size_t) i] == 2 && written[(size_t) i])
                 {
-                    auto& n = score.notes[(size_t) i];
-                    pedalAt[{ (int) std::round (n.start * U), (int) std::round ((n.start + n.length) * U) }].push_back (i);
+                    pedalAt[{ qStart[(size_t) i], qEnd[(size_t) i] }].push_back (i);
                 }
             for (auto& [t, idx] : pedalAt)
                 for (int a : idx)
@@ -304,7 +470,7 @@ namespace
         }
         std::array<std::vector<std::pair<int, int>>, 3> staffNotes; // per staff: (index into score.notes, key)
         for (int i = 0; i < (int) score.notes.size(); ++i)
-            if (! hidden[(size_t) i])
+            if (! hidden[(size_t) i] && written[(size_t) i])
                 staffNotes[(size_t) staffOf[(size_t) i]].push_back ({ i, score.notes[(size_t) i].key });
 
         {
@@ -330,13 +496,8 @@ namespace
             for (auto [idx, key] : staffNotes[(size_t) s])
             {
                 auto& n = score.notes[(size_t) idx];
-                int qs = (int) std::round (n.start * U);
-                int qe = (int) std::round ((n.start + n.length) * U);
-                qs = juce::jlimit (0, juce::jmax (0, totalUnits - 1), qs);
-                // longer notes end on the 16th grid; only short notes keep 32nd precision
-                if (qe - qs >= 4)
-                    qe = (int) std::round ((n.start + n.length) * U / 2.0) * 2;
-                qe = juce::jlimit (qs + 1, totalUnits, qe);
+                const int qs = juce::jlimit (0, juce::jmax (0, totalUnits - 1), qStart[(size_t) idx]);
+                const int qe = juce::jlimit (qs + 1, totalUnits, qEnd[(size_t) idx]);
                 qn.push_back ({ qs, qe, key, n.part });
             }
             std::map<int, std::vector<int>> onsetsByPart;
@@ -354,12 +515,58 @@ namespace
                 if (it == on.end())
                     continue;
                 const int next = *it, gap = next - n.qe, len = n.qe - n.qs;
-                if (gap > 0 && gap <= juce::jmax (2, len) && gap <= U)
+                if (gap > 0 && gap <= juce::jmax (U / 4, len) && gap <= U)
                     n.qe = next;
                 // legato playing lets a note ring into the next one; cut that small overlap
                 // so a running line stays in one voice
                 else if (gap < 0 && -gap <= juce::jmax (1, len / 3))
                     n.qe = next;
+            }
+            // A short note on its own (staccato, an echo) is written as an 8th or 16th up to
+            // the next 8th of the bar with a rest after it, not as a lone 32nd.
+            for (auto& n : qn)
+            {
+                if (n.qe - n.qs >= U / 2)
+                    continue;
+                auto& on = onsetsByPart[n.part];
+                auto it = std::upper_bound (on.begin(), on.end(), n.qs);
+                const auto tri = triplets.find (n.qs / U);
+                const int step = tri != triplets.end() ? tri->second : U / 2;
+                int target = (n.qs / step + 1) * step;
+                if (it != on.end())
+                    target = juce::jmin (target, *it);
+                n.qe = juce::jlimit (n.qe, totalUnits, target);
+            }
+            // Notes struck together and let go at nearly the same time form one chord:
+            // their ends are made equal, so the chord is not spread over several voices.
+            {
+                std::map<int, std::vector<QN*>> byStart;
+                for (auto& n : qn)
+                    byStart[n.qs].push_back (&n);
+                std::map<int, std::vector<int>> onsetsOfKey;
+                for (auto& n : qn)
+                    onsetsOfKey[n.key].push_back (n.qs);
+                for (auto& [k, on] : onsetsOfKey)
+                    std::sort (on.begin(), on.end());
+                for (auto& [qs, group] : byStart)
+                {
+                    std::sort (group.begin(), group.end(), [] (QN* a, QN* b) { return a->qe < b->qe; });
+                    for (size_t i = 0; i < group.size();)
+                    {
+                        size_t j = i + 1;
+                        const int tol = juce::jmax (U / 2, (group[i]->qe - qs) / 4);
+                        while (j < group.size() && group[j]->qe - group[i]->qe <= tol)
+                            ++j;
+                        const int e = group[j - 1]->qe;
+                        for (size_t k = i; k < j; ++k)
+                        {
+                            auto& on = onsetsOfKey[group[k]->key];
+                            auto it = std::upper_bound (on.begin(), on.end(), qs);
+                            group[k]->qe = it == on.end() ? e : juce::jmin (e, *it);
+                        }
+                        i = j;
+                    }
+                }
             }
 
             std::map<std::pair<int, int>, int> divisionOf; // (start, key) -> division
@@ -456,6 +663,30 @@ namespace
             });
             if (vs.empty())
                 vs.push_back ({});
+            // A rest of up to a beat inside a voice, while another voice holds a note across
+            // it, could only be printed hidden: the note before it is written longer instead,
+            // as a copyist would, so no note is left with a flag and nothing after it.
+            for (int v = 0; v < (int) vs.size(); ++v)
+            {
+                auto& cs = vs[(size_t) v].chords;
+                for (size_t i = 0; i + 1 < cs.size(); ++i)
+                {
+                    const int g0 = cs[i].qe, g1 = cs[i + 1].qs;
+                    if (g1 <= g0 || g1 - g0 > U)
+                        continue;
+                    bool covered = false;
+                    for (int w = 0; w < (int) vs.size() && ! covered; ++w)
+                        if (w != v)
+                            for (auto& c : vs[(size_t) w].chords)
+                                if (c.qs <= g0 && c.qe >= g1)
+                                {
+                                    covered = true;
+                                    break;
+                                }
+                    if (covered)
+                        cs[i].qe = g1;
+                }
+            }
             if (s == 1 || s == 2)
             {
                 int sum = 0, cnt = 0;
@@ -490,7 +721,7 @@ namespace
                         auto& c = voiceChords[k];
                         const int s0 = juce::jmax (c.qs, ms), e0 = juce::jmin (c.qe, me);
                         if (s0 > pos)
-                            for (auto& val : decompose (pos - ms, s0 - pos, m, true))
+                            for (auto& val : decompose (pos - ms, s0 - pos, m, triplets, true))
                             {
                                 QEvent r;
                                 r.start = pos - ms;
@@ -498,10 +729,12 @@ namespace
                                 r.rest = true;
                                 r.typeUnits = val.typeUnits;
                                 r.dots = val.dots;
+                            r.triplet = val.triplet;
+                                r.triplet = val.triplet;
                                 evs.push_back (r);
                                 pos += val.units;
                             }
-                        auto pieces = decompose (s0 - ms, e0 - s0, m);
+                        auto pieces = decompose (s0 - ms, e0 - s0, m, triplets);
                         for (size_t p = 0; p < pieces.size(); ++p)
                         {
                             QEvent e;
@@ -509,6 +742,7 @@ namespace
                             e.dur = pieces[p].units;
                             e.typeUnits = pieces[p].typeUnits;
                             e.dots = pieces[p].dots;
+                            e.triplet = pieces[p].triplet;
                             for (int key : c.keys)
                             {
                                 QNote n;
@@ -533,7 +767,7 @@ namespace
                         any = true;
                     }
                     if (any && pos < me)
-                        for (auto& val : decompose (pos - ms, me - pos, m, true))
+                        for (auto& val : decompose (pos - ms, me - pos, m, triplets, true))
                         {
                             QEvent r;
                             r.start = pos - ms;
@@ -541,6 +775,7 @@ namespace
                             r.rest = true;
                             r.typeUnits = val.typeUnits;
                             r.dots = val.dots;
+                            r.triplet = val.triplet;
                             evs.push_back (r);
                             pos += val.units;
                         }
@@ -551,7 +786,7 @@ namespace
                         r.dur = m.length;
                         r.rest = true;
                         r.wholeMeasureRest = true;
-                        r.typeUnits = 32;
+                        r.typeUnits = 4 * U;
                         evs.push_back (r);
                     }
                 }
@@ -570,7 +805,7 @@ namespace
                             break;
                         }
                 const bool compound = m.den == 8 && m.num % 3 == 0 && m.num > 3;
-                const int group = compound ? 12 : (m.den == 8 ? 4 * 3 : 8);
+                const int group = compound || m.den == 8 ? 3 * U / 2 : U;
 
                 for (int v = 0; v < (int) st.voices.size(); ++v)
                 {
@@ -578,10 +813,24 @@ namespace
                     for (auto& e : evs)
                         e.stem = activeVoices > 1 && ! e.rest ? (v % 2 == 0 ? 1 : 2) : 0;
 
+                    // triplet brackets: one group per beat
+                    for (size_t i = 0; i < evs.size(); ++i)
+                    {
+                        if (! evs[i].triplet)
+                            continue;
+                        const int b = (m.start + evs[i].start) / U;
+                        size_t j = i;
+                        while (j + 1 < evs.size() && evs[j + 1].triplet && (m.start + evs[j + 1].start) / U == b)
+                            ++j;
+                        evs[i].tupletStart = true;
+                        evs[j].tupletStop = true;
+                        i = j;
+                    }
+
                     size_t i = 0;
                     while (i < evs.size())
                     {
-                        auto beamable = [&] (const QEvent& e) { return ! e.rest && e.typeUnits <= 4; };
+                        auto beamable = [&] (const QEvent& e) { return ! e.rest && e.typeUnits <= U / 2; };
                         if (! beamable (evs[i]))
                         {
                             ++i;
@@ -645,20 +894,89 @@ namespace
                     state[slot] = n->alter;
                 }
             }
+            // Clef changes on the manual staves: a hand that stays high (or low) for more than
+            // a bar gets the other clef instead of a stack of ledger lines.
+            {
+                // ledger lines a note needs in each clef (diatonic steps from the staff)
+                const size_t nm = q.measures.size();
+                std::vector<double> inBass (nm, 0), inTreble (nm, 0);
+                std::vector<int> count (nm, 0);
+                auto ledgers = [] (int d, int bottom, int top) {
+                    return d > top + 1 ? (d - top) / 2 : d < bottom - 1 ? (bottom - d) / 2 : 0;
+                };
+                for (size_t mi = 0; mi < nm; ++mi)
+                    for (auto& voice : st.voices)
+                        for (auto& e : voice[mi])
+                            for (auto& n : e.notes)
+                            {
+                                const int d = n.step + 7 * n.octave;
+                                inBass[mi] += ledgers (d, 4 + 7 * 2, 5 + 7 * 3);   // G2 .. A3
+                                inTreble[mi] += ledgers (d, 2 + 7 * 4, 3 + 7 * 5); // E4 .. F5
+                                ++count[mi];
+                            }
+                // the other clef must save most notes a ledger line, in this bar and the next
+                auto wantsTreble = [&] (size_t mi) { return count[mi] > 0 && inBass[mi] - inTreble[mi] >= 0.75 * count[mi]; };
+                auto wantsBass = [&] (size_t mi) { return count[mi] > 0 && inTreble[mi] - inBass[mi] >= 0.75 * count[mi]; };
+                std::vector<double> mean (nm, -1);
+                for (size_t mi = 0; mi < nm; ++mi)
+                    if (count[mi] > 0)
+                        mean[mi] = 0;
+                st.clefBass.assign (nm, st.bass ? 1 : 0);
+                bool bass = st.bass;
+                if (st.part == 0)
+                    for (size_t mi = 0; mi < nm; ++mi)
+                    {
+                        if (mean[mi] >= 0)
+                        {
+                            size_t next = mi + 1;
+                            while (next < nm && mean[next] < 0)
+                                ++next;
+                            if (bass && wantsTreble (mi) && (next >= nm || wantsTreble (next)))
+                                bass = false;
+                            else if (! bass && wantsBass (mi) && (next >= nm || wantsBass (next)))
+                                bass = true;
+                        }
+                        st.clefBass[mi] = bass ? 1 : 0;
+                    }
+                if (nm > 0)
+                    st.bass = st.clefBass[0] != 0;
+            }
             q.staves.push_back (std::move (st));
         }
         return q;
+    }
+
+    // Is the triplet group starting at evs[i] marked with a "3"? j becomes its last event.
+    bool tupletShown (const std::vector<QEvent>& evs, size_t i, size_t& j, bool& bracket)
+    {
+        if (! evs[i].tupletStart)
+            return false;
+        j = i;
+        while (j + 1 < evs.size() && ! evs[j].tupletStop)
+            ++j;
+        int visibleNotes = 0;
+        bool hiddenRest = false;
+        bracket = evs[i].beam != 1 || evs[j].beam != 3;
+        for (size_t k = i; k <= j; ++k)
+        {
+            bracket |= evs[k].rest || evs[k].beam == 0;
+            hiddenRest |= evs[k].rest && evs[k].hidden;
+            visibleNotes += evs[k].rest ? 0 : 1;
+        }
+        if (hiddenRest)
+            bracket = false;
+        return ! hiddenRest || visibleNotes >= 2;
     }
 
     juce::String typeName (int typeUnits)
     {
         switch (typeUnits)
         {
-            case 32: return "whole";
-            case 16: return "half";
-            case 8: return "quarter";
-            case 4: return "eighth";
-            case 2: return "16th";
+            case 4 * U: return "whole";
+            case 2 * U: return "half";
+            case U: return "quarter";
+            case U / 2: return "eighth";
+            case U / 4: return "16th";
             default: return "32nd";
         }
     }
@@ -715,6 +1033,8 @@ juce::String toMusicXML (const Score& score, const Options& opt)
     // Where a hand changes manual: walk each manual staff in time order (all voices together)
     // and mark the places where the manual differs from what that staff played just before,
     // unless the old manual is still sounding there (two manuals at once need no label).
+    // A label is only written when the hand stays on the new manual for at least a beat and
+    // the last label is a beat away; quick back-and-forth is shown by the note colours alone.
     std::map<std::tuple<int, int, int>, int> labelAt; // (measure, staff, position) -> division
     if (q.manualsUsed > 1)
         for (int k = 0; k < (int) q.staves.size(); ++k)
@@ -722,9 +1042,12 @@ juce::String toMusicXML (const Score& score, const Options& opt)
             if (q.staves[(size_t) k].part != 0)
                 continue;
             auto& st = q.staves[(size_t) k];
+            struct Ev { int abs, mi, start, end, division; bool oldSounding; };
+            std::vector<Ev> all;
             int current = -1;
             for (int mi = 0; mi < (int) q.measures.size(); ++mi)
             {
+                const int ms = q.measures[(size_t) mi].start;
                 std::vector<const QEvent*> evs;
                 for (auto& voice : st.voices)
                     for (auto& e : voice[(size_t) mi])
@@ -734,16 +1057,32 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                 for (auto* e : evs)
                 {
                     const int dv = e->notes.front().division;
-                    if (dv < 0 || dv == current)
+                    if (dv < 0)
                         continue;
                     bool oldStillSounding = false;
-                    for (auto* o : evs)
-                        oldStillSounding |= o != e && o->notes.front().division == current && o->start < e->start + e->dur
-                                            && o->start + o->dur > e->start;
-                    if (! oldStillSounding)
-                        labelAt[{ mi, k, e->start }] = dv;
+                    if (dv != current)
+                        for (auto* o : evs)
+                            oldStillSounding |= o != e && o->notes.front().division == current && o->start < e->start + e->dur
+                                                && o->start + o->dur > e->start;
+                    all.push_back ({ ms + e->start, mi, e->start, ms + e->start + e->dur, dv, oldStillSounding });
                     current = dv;
                 }
+            }
+            current = -1;
+            int lastLabel = -(1 << 30);
+            for (size_t i = 0; i < all.size(); ++i)
+            {
+                auto& e = all[i];
+                if (e.division == current)
+                    continue;
+                current = e.division;
+                int runEnd = e.end;
+                for (size_t j = i + 1; j < all.size() && all[j].division == e.division; ++j)
+                    runEnd = juce::jmax (runEnd, all[j].end);
+                if (e.oldSounding || runEnd - e.abs < U || e.abs - lastLabel < U)
+                    continue;
+                labelAt[{ e.mi, k, e.start }] = e.division;
+                lastLabel = e.abs;
             }
         }
     std::set<std::tuple<int, int, int>> labelled;
@@ -759,7 +1098,13 @@ juce::String toMusicXML (const Score& score, const Options& opt)
         {
             auto& m = q.measures[(size_t) mi];
             o << "    <measure number=\"" << (mi + 1) << "\"" << (mi > 0 && m.length != m.num * 4 * U / m.den ? " implicit=\"yes\"" : "") << ">\n";
-            if (mi == 0 || m.timeChange || m.keyChange)
+            bool clefChange = false;
+            for (int k = 0; k < (int) staffIdx.size(); ++k)
+            {
+                auto& cb = q.staves[(size_t) staffIdx[(size_t) k]].clefBass;
+                clefChange |= mi > 0 && mi < (int) cb.size() && cb[(size_t) mi] != cb[(size_t) mi - 1];
+            }
+            if (mi == 0 || m.timeChange || m.keyChange || clefChange)
             {
                 o << "      <attributes>";
                 if (mi == 0)
@@ -777,6 +1122,14 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                         o << "<clef number=\"" << (k + 1) << "\"><sign>" << (bass ? "F" : "G") << "</sign><line>" << (bass ? 4 : 2) << "</line></clef>";
                     }
                 }
+                else
+                    for (int k = 0; k < (int) staffIdx.size(); ++k)
+                    {
+                        auto& cb = q.staves[(size_t) staffIdx[(size_t) k]].clefBass;
+                        if (mi < (int) cb.size() && cb[(size_t) mi] != cb[(size_t) mi - 1])
+                            o << "<clef number=\"" << (k + 1) << "\"><sign>" << (cb[(size_t) mi] ? "F" : "G") << "</sign><line>"
+                              << (cb[(size_t) mi] ? 4 : 2) << "</line></clef>";
+                    }
                 o << "</attributes>\n";
             }
             if (mi == 0 && part == 0)
@@ -799,8 +1152,37 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                     const int voiceNo = k * 4 + v + 1;
                     size_t tempoIdx = 0;
                     int written = 0;
+                    // triplet groups: one "3" per beat and staff, with a bracket unless the
+                    // group is one beamed run or has hidden rests in it
+                    std::map<const QEvent*, juce::String> tupletMark; // event -> "<tuplet .../>"
+                    for (size_t i = 0; i < evs.size(); ++i)
+                    {
+                        size_t j = 0;
+                        bool bracket = false;
+                        if (! tupletShown (evs, i, j, bracket))
+                            continue;
+                        const int beatNo = (m.start + evs[i].start) / U;
+                        bool markedAbove = false;
+                        for (int w = 0; w < v && ! markedAbove; ++w)
+                        {
+                            auto& other = st.voices[(size_t) w][(size_t) mi];
+                            for (size_t i2 = 0; i2 < other.size() && ! markedAbove; ++i2)
+                            {
+                                size_t j2 = 0;
+                                bool b2 = false;
+                                markedAbove = (m.start + other[i2].start) / U == beatNo && tupletShown (other, i2, j2, b2);
+                            }
+                        }
+                        if (markedAbove)
+                            continue;
+                        tupletMark[&evs[i]] = juce::String ("<tuplet type=\"start\" bracket=\"") + (bracket ? "yes" : "no") + "\"/>";
+                        tupletMark[&evs[j]] += "<tuplet type=\"stop\"/>";
+                    }
+                    const juce::String timeMod = "<time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>";
                     for (auto& e : evs)
                     {
+                        const auto markIt = tupletMark.find (&e);
+                        const juce::String mark = markIt != tupletMark.end() ? markIt->second : juce::String();
                         if (part == 0 && k == 0 && v == 0)
                             while (tempoIdx < m.tempos.size() && m.tempos[tempoIdx].first <= e.start)
                             {
@@ -833,8 +1215,13 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                                 o << "<type>" << typeName (e.typeUnits) << "</type>";
                                 for (int d = 0; d < e.dots; ++d)
                                     o << "<dot/>";
+                                if (e.triplet)
+                                    o << timeMod;
                             }
-                            o << "<staff>" << (k + 1) << "</staff></note>\n";
+                            o << "<staff>" << (k + 1) << "</staff>";
+                            if (mark.isNotEmpty())
+                                o << "<notations>" << mark << "</notations>";
+                            o << "</note>\n";
                         }
                         else
                         {
@@ -855,16 +1242,20 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                                     o << "<dot/>";
                                 if (n.showAccidental != -99)
                                     o << "<accidental>" << (n.showAccidental > 0 ? "sharp" : n.showAccidental < 0 ? "flat" : "natural") << "</accidental>";
+                                if (e.triplet)
+                                    o << timeMod;
                                 if (e.stem != 0)
                                     o << "<stem>" << (e.stem == 1 ? "up" : "down") << "</stem>";
                                 o << "<staff>" << (k + 1) << "</staff>";
                                 if (ni == 0 && e.beam != 0)
                                     o << "<beam number=\"1\">" << (e.beam == 1 ? "begin" : e.beam == 2 ? "continue" : "end") << "</beam>";
-                                if (n.tieStart || n.tieStop)
+                                const bool markHere = ni == 0 && mark.isNotEmpty();
+                                if (n.tieStart || n.tieStop || markHere)
                                 {
                                     o << "<notations>";
                                     if (n.tieStop) o << "<tied type=\"stop\"/>";
                                     if (n.tieStart) o << "<tied type=\"start\"/>";
+                                    if (markHere) o << mark;
                                     o << "</notations>";
                                 }
                                 o << "</note>\n";
@@ -897,6 +1288,7 @@ juce::String toABC (const Score& score, const Options& opt)
         o << "C:" << q.composer << "\n";
     o << "M:" << m0.num << "/" << m0.den << "\n";
     o << "L:1/32\n";
+    constexpr int perAbc = U / 8; // grid units per ABC length unit (a 32nd)
     o << "Q:1/4=" << juce::roundToInt (q.firstTempo) << "\n";
 
     juce::StringArray voiceIds;
@@ -933,16 +1325,31 @@ juce::String toABC (const Score& score, const Options& opt)
                 auto& m = q.measures[(size_t) mi];
                 if (mi > 0 && m.timeChange)
                     o << "[M:" << m.num << "/" << m.den << "]";
-                if (mi > 0 && m.keyChange)
-                    o << "[K:" << keyName (m.fifths, m.minor, false) << "]";
+                const bool clefNow = mi > 0 && mi < (int) st.clefBass.size() && st.clefBass[(size_t) mi] != st.clefBass[(size_t) mi - 1];
+                if ((mi > 0 && m.keyChange) || clefNow)
+                    o << "[K:" << keyName (m.fifths, m.minor, false)
+                      << (clefNow ? (st.clefBass[(size_t) mi] ? " clef=bass" : " clef=treble") : "") << "]";
                 auto& evs = st.voices[(size_t) v][(size_t) mi];
                 if (evs.empty())
-                    o << "x" << m.length;
+                    o << "x" << m.length / perAbc;
                 for (size_t i = 0; i < evs.size(); ++i)
                 {
                     auto& e = evs[i];
+                    // triplets are written with their plain value inside (3:2:n
+                    const int abcLen = (e.triplet ? e.dur * 3 / 2 : e.dur) / perAbc;
+                    if (e.tupletStart)
+                    {
+                        int n = 0;
+                        for (size_t j = i; j < evs.size(); ++j)
+                        {
+                            ++n;
+                            if (evs[j].tupletStop)
+                                break;
+                        }
+                        o << "(3:2:" << n;
+                    }
                     if (e.rest)
-                        o << (e.hidden ? "x" : "z") << e.dur;
+                        o << (e.hidden ? "x" : "z") << abcLen;
                     else
                     {
                         if (e.notes.size() > 1)
@@ -969,7 +1376,7 @@ juce::String toABC (const Score& score, const Options& opt)
                         }
                         if (e.notes.size() > 1)
                             o << "]";
-                        o << e.dur;
+                        o << abcLen;
                         if (e.notes.size() == 1 && e.notes[0].tieStart)
                             o << "-";
                     }
@@ -999,7 +1406,7 @@ juce::String toLilyPond (const Score& score, const Options& opt)
     o << "  tagline = \"Orgelwerk\"\n}\n\n";
 
     auto durStr = [] (int typeUnits, int dots) {
-        juce::String d (32 / typeUnits);
+        juce::String d (4 * U / typeUnits);
         for (int i = 0; i < dots; ++i)
             d << ".";
         return d;
@@ -1017,7 +1424,7 @@ juce::String toLilyPond (const Score& score, const Options& opt)
     };
     auto spacer = [] (int units) {
         // spacer for a whole measure of any length in 32nds
-        return "s32*" + juce::String (units);
+        return "s32*" + juce::String (units * 8 / U);
     };
 
     juce::StringArray staffNames;
@@ -1036,6 +1443,8 @@ juce::String toLilyPond (const Score& score, const Options& opt)
             for (int mi = 0; mi < (int) q.measures.size(); ++mi)
             {
                 auto& m = q.measures[(size_t) mi];
+                if (mi > 0 && mi < (int) st.clefBass.size() && st.clefBass[(size_t) mi] != st.clefBass[(size_t) mi - 1])
+                    o << "\\clef " << (st.clefBass[(size_t) mi] ? "bass" : "treble") << " ";
                 if (m.keyChange)
                     o << "\\key " << keyName (m.fifths, m.minor, true) << " ";
                 if (m.timeChange)
@@ -1045,14 +1454,18 @@ juce::String toLilyPond (const Score& score, const Options& opt)
                     o << spacer (m.length) << " ";
                 for (auto& e : evs)
                 {
+                    if (e.tupletStart)
+                        o << "\\tuplet 3/2 { ";
+                    const char* closeTuplet = e.tupletStop ? "} " : "";
                     if (e.rest)
                     {
                         if (e.hidden)
-                            o << "s" << (e.wholeMeasureRest ? "32*" + juce::String (m.length) : durStr (e.typeUnits, e.dots)) << " ";
+                            o << "s" << (e.wholeMeasureRest ? "32*" + juce::String (m.length * 8 / U) : durStr (e.typeUnits, e.dots)) << " ";
                         else if (e.wholeMeasureRest)
-                            o << "R32*" << m.length << " ";
+                            o << "R32*" << m.length * 8 / U << " ";
                         else
                             o << "r" << durStr (e.typeUnits, e.dots) << " ";
+                        o << closeTuplet;
                         continue;
                     }
                     if (e.notes.size() > 1)
@@ -1072,7 +1485,7 @@ juce::String toLilyPond (const Score& score, const Options& opt)
                         o << "~";
                     if (e.beam == 1) o << "[";
                     if (e.beam == 3) o << "]";
-                    o << " ";
+                    o << " " << closeTuplet;
                 }
                 o << "|\n    ";
             }
