@@ -135,9 +135,15 @@ namespace ScoreIO
             juce::String trackName;
         };
 
-        Registration programsAt (const Stream& s, double beat)
+        Registration programsAt (const Stream& s, double beat, bool firstIfNone = false)
         {
             int bank = -1, prog = -1;
+            // a program set just after the first note still counts for the beginning
+            if (firstIfNone && ! s.programs.empty())
+            {
+                bank = std::get<1> (s.programs.front());
+                prog = std::get<2> (s.programs.front());
+            }
             for (auto& [b, bk, pr] : s.programs)
                 if (b <= beat + 1.0e-6)
                 {
@@ -147,6 +153,125 @@ namespace ScoreIO
             if (prog < 0)
                 return {};
             return { RegStop { juce::jmax (0, bank), prog, 0 } };
+        }
+
+        // the pitch of a preset in feet from its name ("Montre 8", "Bourdon 16"); no number: 8'
+        double feetOf (const juce::String& name)
+        {
+            for (int i = 0; i < name.length(); ++i)
+                if (juce::CharacterFunctions::isDigit (name[i]))
+                {
+                    int v = 0;
+                    while (i < name.length() && juce::CharacterFunctions::isDigit (name[i]))
+                        v = v * 10 + (name[i++] - '0');
+                    return v;
+                }
+            return 8.0;
+        }
+
+        // A SoundFont made for General MIDI (piano at 0:0) plays GM programs as they are.
+        bool isGeneralMidiFont (const SoundFont& sf)
+        {
+            auto n = sf.presetName (0, 0);
+            return n.containsIgnoreCase ("piano") || n.containsIgnoreCase ("grand") || n.containsIgnoreCase ("flügel");
+        }
+
+        // The organ stops that stand in for a General MIDI instrument: looked up in the organ
+        // SoundFont by name and pitch (a flute plays on flute stops, a trumpet on a trumpet,
+        // strings on gambas and celestes, a choir on the vox humana, a bass on 16' and 8').
+        Registration instrumentRegistration (int program, bool low, const SoundFont& sf)
+        {
+            struct Want
+            {
+                std::vector<const char*> words;
+                double feet; // 0: any
+            };
+            const std::vector<const char*> principal { "Principal", "Prinzipal", "Montre", "Prestant", "Octav", "Diapason", "Prin." };
+            const std::vector<const char*> flute { "Flute", "Flöte", "Flûte", "Bourdon", "Gedackt", "Rohrfl", "Holzfl", "Spitzfl" };
+            const std::vector<const char*> strings { "Gamba", "Viol", "Salicional", "Salicionale" };
+            const std::vector<const char*> celeste { "Celeste", "Céleste", "Unda" };
+            const std::vector<const char*> trumpet { "Trompette", "Trumpet", "Tromp" };
+            const std::vector<const char*> bassReed { "Posaune", "Bombarde", "Basson", "Fagott", "Basse de Tromp" };
+            const std::vector<const char*> oboe { "Hautbois", "Oboe", "Cor Anglais", "Schalmei" };
+            const std::vector<const char*> clarinet { "Cromorne", "Krumm", "Clarinet" };
+            const std::vector<const char*> vox { "Vox Humana", "Voix Humaine", "Vox" };
+            const std::vector<const char*> bells { "Glocken", "Carillon", "Bells", "Zimbelstern" };
+            const std::vector<const char*> cornet { "Cornet", "Sesquialt" };
+            const std::vector<const char*> regal { "Regal", "Cornemuse", "Musette" };
+            const std::vector<const char*> recorder { "Blockfl", "Flageolet", "Flöte 4", "Flute 4" };
+            const std::vector<const char*> mixture { "Mixtur", "Fourniture", "Plein Jeu" };
+
+            std::vector<Want> wants;
+            const int family = program / 8;
+            auto add = [&] (const std::vector<const char*>& w, double feet) { wants.push_back ({ w, feet }); };
+            if (low || family == 4) // a bass line: 16' and 8' foundation (with a reed for brass and reeds)
+            {
+                add (flute, 16);
+                add (principal, 16);
+                add (principal, 8);
+                if (family == 7 || family == 8)
+                    add (bassReed, 16);
+            }
+            else switch (family)
+            {
+                case 0: add (principal, 8); add (principal, 4); break;                    // piano
+                case 1: add (bells, 0); add (flute, 4); add (flute, 2); break;            // glockenspiel, celesta ...
+                case 2: if (program == 19 || program == 20) { add (principal, 8); add (principal, 4); add (mixture, 0); }
+                        else { add (flute, 8); add (flute, 4); }
+                        break;                                                            // organs
+                case 3: add (flute, 8); add (flute, 4); break;                            // guitars
+                case 5: if (program == 46) { add (flute, 8); add (flute, 4); }            // harp
+                        else if (program == 47) { add (flute, 16); add (principal, 8); }  // timpani
+                        else { add (strings, 8); add (celeste, 8); }
+                        break;                                                            // strings
+                case 6: if (program >= 52 && program <= 54) { add (vox, 8); add (flute, 8); }
+                        else if (program == 55) { add (principal, 8); add (principal, 4); add (mixture, 0); add (trumpet, 8); }
+                        else { add (strings, 8); add (celeste, 8); }
+                        break;                                                            // ensembles, choir
+                case 7: if (program == 58) add (bassReed, 16); else add (trumpet, 8);
+                        add (principal, 8);
+                        break;                                                            // brass
+                case 8: if (program == 70) add (bassReed, 16);
+                        else if (program == 71) add (clarinet, 8);
+                        else add (oboe, 8);
+                        add (flute, 8);
+                        break;                                                            // reeds
+                case 9: if (program == 72) { add (flute, 4); add (flute, 2); }
+                        else if (program == 74) add (recorder, 0);
+                        else { add (flute, 8); add (flute, 4); }
+                        break;                                                            // flutes
+                case 10: add (cornet, 0); add (principal, 8); break;                      // synth lead
+                case 11: add (strings, 8); add (celeste, 8); add (flute, 8); break;       // synth pad
+                case 13: add (regal, 8); add (flute, 8); break;                           // ethnic (bagpipe ...)
+                case 14: add (bells, 0); add (flute, 2); break;                           // percussive
+                default: add (flute, 8); add (strings, 8); break;
+            }
+            Registration reg;
+            for (auto& w : wants)
+            {
+                for (auto& p : sf.getPresets())
+                {
+                    bool match = false;
+                    for (auto* word : w.words)
+                        match |= p.name.containsIgnoreCase (juce::String::fromUTF8 (word));
+                    // single stops only (no "Tutti", no "Montre 8 Flute 4" combinations)
+                    int numbers = 0;
+                    for (int i = 0; i < p.name.length(); ++i)
+                        if (juce::CharacterFunctions::isDigit (p.name[i]) && (i == 0 || ! juce::CharacterFunctions::isDigit (p.name[i - 1])))
+                            ++numbers;
+                    if (! match || numbers > 1 || p.name.containsIgnoreCase ("Tutti") || p.name.containsIgnoreCase ("+"))
+                        continue;
+                    if (w.feet > 0 && std::abs (feetOf (p.name) - w.feet) > 0.01)
+                        continue;
+                    RegStop rs { p.bank, p.program, 0 };
+                    if (std::find (reg.begin(), reg.end(), rs) == reg.end())
+                    {
+                        reg.push_back (rs);
+                        break;
+                    }
+                }
+            }
+            return reg;
         }
     } // namespace
 
@@ -280,6 +405,23 @@ namespace ScoreIO
 
         // Organ files often double one line on several channels, one channel per stop.
         // Merge streams with identical notes into one part with a combined registration.
+        // Program numbers mean organ stops only in files made for an organ SoundFont (Jeux files
+        // select bank 42 or 43). In any other file they are General MIDI instruments: with an
+        // organ SoundFont loaded, they are played on organ stops that sound like them.
+        // program changes in another track than the notes of the same channel (type 1 files)
+        for (auto& [key, st] : streams)
+            if (st.programs.empty())
+                for (auto& [key2, other] : streams)
+                    if (key2.second == key.second && ! other.programs.empty())
+                    {
+                        st.programs = other.programs;
+                        break;
+                    }
+        bool organNumbering = false;
+        for (auto& [key, st] : streams)
+            for (auto& [b, bk, pr] : st.programs)
+                organNumbering |= bk == 42 || bk == 43;
+        const bool generalMidi = sf != nullptr && ! organNumbering && ! isGeneralMidiFont (*sf);
         std::vector<Stream*> order;
         for (auto& [key, s] : streams)
             if (! s.notes.empty())
@@ -389,11 +531,27 @@ namespace ScoreIO
             }
 
             const double firstBeat = first.notes.front().start;
-            auto collect = [&] (double beat) {
+            // a low line (mostly below the tenor) is registered like a bass
+            double meanKey = 0;
+            for (auto& nt : first.notes)
+                meanKey += nt.key + lift;
+            meanKey /= juce::jmax<size_t> (1, first.notes.size());
+            auto collect = [&] (double beat, bool atStart) {
                 Registration reg;
                 for (size_t g = 0; g < group.size(); ++g)
-                    for (auto rs : programsAt (*group[g], beat))
+                    for (auto rs : programsAt (*group[g], beat, atStart))
                     {
+                        if (generalMidi)
+                        {
+                            // a GM instrument: the organ stops that sound like it
+                            for (auto stop : instrumentRegistration (rs.program, meanKey < 48.0, *sf))
+                            {
+                                stop.octave = octaveOf (g);
+                                if (std::find (reg.begin(), reg.end(), stop) == reg.end())
+                                    reg.push_back (stop);
+                            }
+                            continue;
+                        }
                         if (sf != nullptr)
                             sf->resolvePreset (rs.bank, rs.program);
                         rs.octave = octaveOf (g);
@@ -402,7 +560,7 @@ namespace ScoreIO
                     }
                 return reg;
             };
-            part.registration = collect (firstBeat);
+            part.registration = collect (firstBeat, true);
             if (sf != nullptr)
                 for (auto& rs : part.registration)
                 {
@@ -462,7 +620,7 @@ namespace ScoreIO
             Registration last = part.registration;
             for (double b : changeBeats)
             {
-                auto reg = collect (b);
+                auto reg = collect (b, false);
                 if (! lowerOfPair.empty())
                 {
                     auto base = reg;
@@ -481,18 +639,6 @@ namespace ScoreIO
             }
         }
 
-        // Program numbers only mean organ stops in files made for an organ SoundFont (they
-        // select banks). In ordinary General-MIDI files they are instruments (flute, strings,
-        // drums ...): play those with the organ's current registration instead.
-        if (! usesBankSelect)
-        {
-            for (auto& p : score->parts)
-            {
-                p.registration.clear();
-                p.pedalStops = false;
-            }
-            score->registrationChanges.clear();
-        }
         score->finalise();
         estimateKeyIfMissing (*score);
         // drop duplicate meta events that multi-track files repeat in every track

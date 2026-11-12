@@ -30,6 +30,11 @@ SF2-SoundFont (eingebaut: **Jeux14**), die Noten stehen auf dem Notenpult in der
 - **Stimmen**: legt fest, welche Stimme des Stücks auf welchem Manual/Pedal spielt.
   Verdoppelte Kanäle in Orgel-MIDI-Dateien (ein Kanal pro Register) werden erkannt und als
   Registrierung gezogen; Programmwechsel mitten im Stück wechseln die Register dieses Werks.
+- **Instrumente als Register**: in normalen General-MIDI-Dateien wird jedes Instrument auf
+  passende Orgelregister gelegt (Klavier → Prinzipal 8′ + 4′, Streicher → Gambe + Schwebung,
+  Flöte → Flöten, Trompete → Trompete 8′, Oboe → Hautbois, Chor → Vox humana, Bass → 16′ + 8′ …).
+  Orgel-MIDI-Dateien für Jeux (Bank 42/43) ziehen weiter genau die Register, die sie angeben;
+  mit einer GM-SoundFont klingen die Instrumente selbst.
 - **Automatische Grundregistrierung**: spielt eine Stimme des Stücks auf einem Werk ohne
   gezogenes Register, zieht Orgelwerk dort Prinzipal 8′ + 4′ (Pedal 16′ + 8′), damit keine
   Stimme stumm bleibt (abschaltbar im Menü „Wiedergabe“).
