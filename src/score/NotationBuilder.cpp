@@ -3,6 +3,8 @@
 #include <set>
 #include <tuple>
 #include <array>
+#include <regex>
+#include <cctype>
 #include "../engine/OrganModel.h"
 
 namespace orgel::NotationBuilder
@@ -1309,9 +1311,197 @@ juce::String manualColour (int division)
 }
 
 //==============================================================================
+juce::String printedStopName (const juce::String& presetName, int octave)
+{
+    // drop qualifiers such as "(ped.)", "(pos.)", "(g.o.)"
+    juce::String name;
+    for (int i = 0; i < presetName.length(); ++i)
+    {
+        if (presetName[i] == '(')
+        {
+            const int close = presetName.indexOfChar (i, ')');
+            if (close > i && close - i <= 8)
+            {
+                i = close;
+                continue;
+            }
+        }
+        name << juce::String::charToString (presetName[i]);
+    }
+    name = name.trim();
+    static const std::pair<double, const char*> nice[] = {
+        { 64, "64" }, { 32, "32" }, { 21.333, "21 1/3" }, { 16, "16" }, { 10.667, "10 2/3" }, { 8, "8" }, { 6.4, "6 2/5" },
+        { 5.333, "5 1/3" }, { 4, "4" }, { 3.2, "3 1/5" }, { 2.667, "2 2/3" }, { 2.286, "2 2/7" }, { 2, "2" }, { 1.6, "1 3/5" },
+        { 1.333, "1 1/3" }, { 1.143, "1 1/7" }, { 1, "1" }, { 0.8, "4/5" }, { 0.667, "2/3" }, { 0.5, "1/2" }
+    };
+    // every footage in the name ("16", "8+4", "2 2/3", "Montre 8 Flute 4") gets its foot mark,
+    // moved by the octave the stop sounds in
+    const std::string text = name.toStdString();
+    static const std::regex number (R"((\d+)(?: (\d+)/(\d+))?)");
+    std::string out;
+    size_t last = 0;
+    bool any = false;
+    for (auto it = std::sregex_iterator (text.begin(), text.end(), number); it != std::sregex_iterator(); ++it)
+    {
+        const auto& m = *it;
+        const size_t pos = (size_t) m.position (0);
+        // a number glued to letters after it ("Mixture3rangs") is not a footage
+        const size_t after = pos + (size_t) m.length (0);
+        if (after < text.size() && std::isalpha ((unsigned char) text[after]))
+            continue;
+        double v = std::stod (m.str (1));
+        if (m[2].matched && std::stod (m.str (3)) > 0)
+            v += std::stod (m.str (2)) / std::stod (m.str (3));
+        v *= std::pow (2.0, -octave);
+        std::string shownValue;
+        for (auto& [nv, txt] : nice)
+            if (std::abs (nv - v) < 0.02 * nv)
+                shownValue = txt;
+        if (shownValue.empty())
+            shownValue = juce::String (v, 2).toStdString();
+        out += text.substr (last, pos - last);
+        if (! out.empty() && (std::isalpha ((unsigned char) out.back()) || out.back() == '.'))
+            out += ' ';
+        out += shownValue + "\u2032";
+        last = after;
+        any = true;
+    }
+    out += text.substr (last);
+    auto result = juce::String (juce::CharPointer_UTF8 (out.c_str()));
+    if (! any)
+        return octave != 0 ? result + (octave < 0 ? " (8va bassa)" : " (8va)") : result;
+    // "8'+4'" -> "8' + 4'"
+    result = result.replace ("+", " + ");
+    while (result.contains ("  "))
+        result = result.replace ("  ", " ");
+    return result.trim();
+}
+
+juce::String divisionAbbreviation (const juce::String& name, int division, bool pedal)
+{
+    const auto n = name.toLowerCase();
+    static const std::pair<const char*, const char*> known[] = {
+        { "hauptwerk", "Hw." }, { "rückpositiv", "Rp." }, { "rueckpositiv", "Rp." }, { "brustpositiv", "Bp." },
+        { "oberwerk", "Ow." }, { "brustwerk", "Bw." }, { "kronwerk", "Kw." }, { "fernwerk", "Fw." }, { "schwell", "Sw." },
+        { "grand orgue", "G.O." }, { "grand-orgue", "G.O." }, { "great", "Gt." }, { "positif", "Pos." }, { "positiv", "Pos." },
+        { "récit", "Réc." }, { "recit", "Réc." }, { "swell", "Sw." }, { "choir", "Ch." }, { "solo", "Solo" },
+        { "bombarde", "Bomb." }, { "pedal", "Ped." }, { "pédale", "Ped." }, { "pedale", "Ped." }
+    };
+    for (auto& [word, abbr] : known)
+        if (n.contains (juce::String::fromUTF8 (word)))
+            return juce::String::fromUTF8 (abbr);
+    return pedal ? juce::String ("Ped.") : "Man. " + romanNumeral (division + 1);
+}
+
+namespace
+{
+    // Registration as organ editions print it: the full list where a division first plays,
+    // later only what changes ("+ Trompette 8', - Cornet") at the first note after the change.
+    // Changes a moment apart are taken together, and a change nobody plays is not printed.
+    struct RegistrationText
+    {
+        int measure = 0, pos = 0, part = 0;
+        juce::String text, division; // division: "Hw." etc.
+    };
+    std::vector<RegistrationText> registrationTexts (const Score& score, const Options& opt, const QScore& q)
+    {
+        std::vector<RegistrationText> out;
+        if (opt.registrations.empty() || q.measures.empty())
+            return out;
+        std::map<int, std::vector<const Options::RegistrationMark*>> byDivision;
+        for (auto& m : opt.registrations)
+            byDivision[m.division].push_back (&m);
+        for (auto& [d, marks] : byDivision)
+        {
+            std::stable_sort (marks.begin(), marks.end(), [] (auto* a, auto* b) { return a->beat < b->beat; });
+            // where this division plays
+            std::vector<double> onsets;
+            for (auto& n : score.notes)
+                if (n.part >= 0 && n.part < (int) opt.partDivision.size() && opt.partDivision[(size_t) n.part] == d
+                    && ! (n.part < (int) score.parts.size() && score.parts[(size_t) n.part].drums))
+                    onsets.push_back (n.start);
+            std::sort (onsets.begin(), onsets.end());
+            const bool pedal = juce::isPositiveAndBelow (d, (int) opt.divisionIsPedal.size()) && opt.divisionIsPedal[(size_t) d];
+            const auto name = juce::isPositiveAndBelow (d, (int) opt.divisionNames.size()) ? opt.divisionNames[(size_t) d] : juce::String();
+            const auto abbr = divisionAbbreviation (name, d, pedal);
+            juce::StringArray shown;
+            int lastMeasure = -1000;
+            const double barBeats = q.measures.front().length / (double) U;
+            for (size_t i = 0; i < marks.size(); ++i)
+            {
+                // a change that is replaced within two bars is not worth printing (the next
+                // one says where it all leads)
+                if (i + 1 < marks.size() && marks[i + 1]->beat - marks[i]->beat < 2.0 * barBeats)
+                    continue;
+                const double next = i + 1 < marks.size() ? marks[i + 1]->beat : 1.0e18;
+                auto it = std::lower_bound (onsets.begin(), onsets.end(), marks[i]->beat - 0.25);
+                if (it == onsets.end() || *it >= next)
+                    continue; // nothing is played with it
+                const auto& now = marks[i]->stops;
+                juce::String text;
+                if (shown.isEmpty())
+                    text = now.joinIntoString (", ");
+                else
+                {
+                    juce::StringArray added, removed;
+                    for (auto& s : now)
+                        if (! shown.contains (s))
+                            added.add ("+ " + s);
+                    for (auto& s : shown)
+                        if (! now.contains (s))
+                            removed.add (juce::String::fromUTF8 ("\u2212 ") + s);
+                    if (added.isEmpty() && removed.isEmpty())
+                        continue;
+                    // a small registration, or most of it new: say it in full
+                    if (now.size() <= 2 || added.size() + removed.size() >= juce::jmax (3, now.size()))
+                        text = now.joinIntoString (", ");
+                    else
+                    {
+                        added.addArray (removed);
+                        text = added.joinIntoString (", ");
+                    }
+                }
+                if (now.isEmpty())
+                    continue;
+                const int at = juce::jmax (0, (int) std::round (*it * 4.0) * (U / 4));
+                int mi = 0;
+                while (mi + 1 < (int) q.measures.size() && q.measures[(size_t) mi + 1].start <= at)
+                    ++mi;
+                // at most one registration per division every four bars; what changes in
+                // between is said with the next one
+                if (mi - lastMeasure < 4)
+                    continue;
+                lastMeasure = mi;
+                shown = now;
+                out.push_back ({ mi, juce::jmin (at - q.measures[(size_t) mi].start, q.measures[(size_t) mi].length - 1), pedal ? 1 : 0,
+                                 abbr + " " + text, abbr });
+            }
+        }
+        std::stable_sort (out.begin(), out.end(), [] (auto& a, auto& b) { return std::tie (a.measure, a.pos) < std::tie (b.measure, b.pos); });
+        return out;
+    }
+
+    // the registration texts that belong to an event (top staff of its part, first voice)
+    juce::StringArray registrationAt (const std::vector<RegistrationText>& texts, const QScore& q, int staff, int voice, int measure, const QEvent& e)
+    {
+        juce::StringArray out;
+        if (voice != 0 || ! juce::isPositiveAndBelow (staff, (int) q.staves.size()))
+            return out;
+        const int part = q.staves[(size_t) staff].part;
+        for (int s = 0; s < staff; ++s)
+            if (q.staves[(size_t) s].part == part)
+                return out; // not the top staff of its part
+        for (auto& t : texts)
+            if (t.measure == measure && t.part == part && t.pos >= e.start && t.pos < e.start + juce::jmax (1, e.dur))
+                out.add (t.text);
+        return out;
+    }
+} // namespace
+
 juce::String toMusicXML (const Score& score, const Options& opt)
 {
     auto q = build (score, opt);
+    const auto regTexts = registrationTexts (score, opt, q);
     juce::MemoryOutputStream o;
     o << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
       << "<!DOCTYPE score-partwise PUBLIC \"-//Recordare//DTD MusicXML 4.0 Partwise//EN\" \"http://www.musicxml.org/dtds/partwise.dtd\">\n"
@@ -1439,6 +1629,13 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                   << juce::roundToInt (q.firstTempo) << "</per-minute></metronome></direction-type><sound tempo=\""
                   << juce::String (q.firstTempo, 2) << "\"/></direction>\n";
 
+            // registration, small and in italics above the staff, at its place in the bar
+            for (auto& rt : regTexts)
+                if (rt.measure == mi && rt.part == part)
+                    o << "      <direction placement=\"above\"><direction-type><words font-style=\"italic\">" << esc (rt.text)
+                      << "</words></direction-type>" << (rt.pos > 0 ? "<offset>" + juce::String (rt.pos) + "</offset>" : juce::String())
+                      << "<staff>1</staff></direction>\n";
+
             bool firstRun = true;
             for (int k = 0; k < (int) staffIdx.size(); ++k)
             {
@@ -1502,10 +1699,20 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                             && labelled.insert ({ mi, k, e.start }).second)
                         {
                             const int dv = labelIt->second;
-                            auto label = juce::isPositiveAndBelow (dv, (int) opt.divisionLabels.size()) ? opt.divisionLabels[(size_t) dv]
-                                                                                                        : "Man. " + romanNumeral (dv + 1);
-                            o << "      <direction placement=\"" << (k == 0 ? "above" : "below") << "\"><direction-type><words font-weight=\"bold\" color=\""
-                              << manualColour (dv) << "\">" << esc (label) << "</words></direction-type><staff>" << (k + 1) << "</staff></direction>\n";
+                            auto label = divisionAbbreviation (juce::isPositiveAndBelow (dv, (int) opt.divisionNames.size()) ? opt.divisionNames[(size_t) dv] : juce::String(),
+                                                               dv, false);
+                            // the registration printed at this place already names the division
+                            bool named = false, crowded = false;
+                            for (auto& rt : regTexts)
+                                if (rt.part == 0)
+                                {
+                                    named |= rt.measure == mi && rt.division == label && std::abs (rt.pos - e.start) < U;
+                                    // a registration line above this staff nearby: the label goes under the staff
+                                    crowded |= std::abs ((q.measures[(size_t) rt.measure].start + rt.pos) - (m.start + e.start)) < 2 * q.measures[(size_t) mi].length;
+                                }
+                            if (! named)
+                                o << "      <direction placement=\"" << (k == 0 && ! crowded ? "above" : "below") << "\"><direction-type><words font-weight=\"bold\" color=\""
+                                  << manualColour (dv) << "\">" << esc (label) << "</words></direction-type><staff>" << (k + 1) << "</staff></direction>\n";
                         }
                         if (e.rest)
                         {
@@ -1589,6 +1796,7 @@ juce::String toMusicXML (const Score& score, const Options& opt)
 juce::String toABC (const Score& score, const Options& opt)
 {
     auto q = build (score, opt);
+    const auto regTexts = registrationTexts (score, opt, q);
     juce::MemoryOutputStream o;
     auto& m0 = q.measures.front();
     o << "X:1\n";
@@ -1657,6 +1865,8 @@ juce::String toABC (const Score& score, const Options& opt)
                         }
                         o << "(3:2:" << n;
                     }
+                    for (auto& t : registrationAt (regTexts, q, s, v, mi, e))
+                        o << "\"^" << t.replace ("\"", "'") << "\"";
                     if (e.rest)
                         o << (e.hidden ? "x" : "z") << abcLen;
                     else
@@ -1712,6 +1922,7 @@ juce::String toABC (const Score& score, const Options& opt)
 juce::String toLilyPond (const Score& score, const Options& opt)
 {
     auto q = build (score, opt);
+    const auto regTexts = registrationTexts (score, opt, q);
     juce::MemoryOutputStream o;
     o << "\\version \"2.24.0\"\n\\header {\n";
     o << "  title = \"" << q.title.replace ("\"", "'") << "\"\n";
@@ -1768,6 +1979,9 @@ juce::String toLilyPond (const Score& score, const Options& opt)
                     o << spacer (m.length) << " ";
                 for (auto& e : evs)
                 {
+                    juce::String markup;
+                    for (auto& t : registrationAt (regTexts, q, s, v, mi, e))
+                        markup << "^\\markup \\italic \"" << t.replace ("\"", "'") << "\" ";
                     if (e.tupletStart)
                         o << "\\tuplet 3/2 { ";
                     const char* closeTuplet = e.tupletStop ? "} " : "";
@@ -1779,7 +1993,7 @@ juce::String toLilyPond (const Score& score, const Options& opt)
                             o << "R32*" << m.length * 8 / U << " ";
                         else
                             o << "r" << durStr (e.typeUnits, e.dots) << " ";
-                        o << closeTuplet;
+                        o << markup << closeTuplet;
                         continue;
                     }
                     if (e.notes.size() > 1)
@@ -1799,6 +2013,8 @@ juce::String toLilyPond (const Score& score, const Options& opt)
                         if (orn != 0)
                             o << (orn == 1 ? "\\trill" : orn == 2 ? "\\mordent" : "\\prall");
                     }
+                    if (markup.isNotEmpty())
+                        o << " " << markup;
                     bool tie = false;
                     for (auto& n : e.notes)
                         tie |= n.tieStart;

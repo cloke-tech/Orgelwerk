@@ -31,9 +31,20 @@ namespace Formats
     std::unique_ptr<Piece> load (const juce::File& f, const SoundFont* sf, int numManuals, int pedalIndex, juce::String& error,
                                  bool engraveMidi = true);
 
+    // What the score shows about the organ: the divisions' names (for "Hw.", "Pos." ...) and
+    // the file's registration over time (printed as stop lists and changes).
+    struct OrganInfo
+    {
+        std::vector<juce::String> divisionNames;
+        std::vector<bool> divisionIsPedal;
+        std::vector<DivisionRegistration> registration;
+        std::shared_ptr<SoundFont> soundFont; // for the stop names
+        static OrganInfo from (OrganEngine& organ, std::vector<DivisionRegistration> registration);
+    };
+
     // Re-engraves a MIDI-based piece, e.g. after parts were moved to other divisions.
     std::shared_ptr<Notation> engrave (const Score& score, const std::vector<bool>& partIsPedal, const std::vector<int>& partDivision,
-                                       juce::String& error);
+                                       juce::String& error, const OrganInfo& organ = {});
 
     // Export
     struct ExportFormat

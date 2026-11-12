@@ -57,6 +57,7 @@ OrgelEditor::OrgelEditor (OrgelProcessor& p)
         proc.applyFileRegistration = registrationToggle.getToggleState();
         if (proc.applyFileRegistration)
             proc.applyPieceRegistration();
+        proc.reengrave(); // the score shows the file's stops only while they are used
     };
 
     position.setRange (0.0, 1.0);
@@ -263,6 +264,7 @@ void OrgelEditor::timerCallback()
     }
     for (auto* p : plates)
         p->refresh();
+    runDeskTest();
 
     const double len = proc.getLength();
     position.setEnabled (len > 0);
@@ -284,6 +286,66 @@ void OrgelEditor::timerCallback()
     auto piece = proc.getPiece();
     titleLabel.setText (proc.isLoading() ? juce::String (juce::String::fromUTF8 ("Lade…")) : (piece != nullptr ? piece->score->title : juce::String ("Orgelwerk")),
                         juce::dontSendNotification);
+}
+
+// ORGEL_DESKTEST=<folder>: sets the pages, switches to page width, jumps through the piece and
+// saves pictures of the music desk, then quits (to check the desk without anyone at the screen).
+void OrgelEditor::runDeskTest()
+{
+    static const char* dir = std::getenv ("ORGEL_DESKTEST");
+    if (dir == nullptr)
+        return;
+    static int step = 0, wait = 0;
+    static const double spots[] = { 0.0, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.8, 0.97 };
+    auto piece = proc.getPiece();
+    if (piece == nullptr || proc.isLoading())
+        return;
+    if (step == 0)
+    {
+        proc.requestEngraving();
+        step = 1;
+        return;
+    }
+    if (piece->notation == nullptr || proc.isEngraving())
+        return;
+    if (++wait < 12) // pages are drawn in the background meanwhile
+        return;
+    wait = 0;
+    auto save = [&] (const juce::String& name) {
+        auto img = desk.createComponentSnapshot (desk.getLocalBounds(), true, 1.0f);
+        juce::File f = juce::File (dir).getChildFile (name + ".png");
+        f.deleteFile();
+        juce::FileOutputStream out (f);
+        juce::PNGImageFormat().writeImageToStream (img, out);
+    };
+    const int n = (int) std::size (spots);
+    if (step == 1)
+    {
+        desk.setZoomed (true);
+        desk.setFollowing (true);
+    }
+    if (step >= 1 && step <= n)
+    {
+        if (step > 1)
+            save ("zoom-" + juce::String (step - 1));
+        if (step <= n)
+            proc.seek (spots[step - 1] * proc.getLength());
+        ++step;
+        return;
+    }
+    if (step == n + 1)
+    {
+        save ("zoom-" + juce::String (n));
+        desk.setZoomed (false);
+        ++step;
+        return;
+    }
+    if (step == n + 2)
+    {
+        save ("whole");
+        juce::JUCEApplicationBase::quit();
+        ++step;
+    }
 }
 
 void OrgelEditor::togglePlay()
@@ -823,6 +885,7 @@ void OrgelEditor::showPartMenu()
         if (r == 100001)
         {
             proc.applyFileRegistration = ! proc.applyFileRegistration;
+            proc.reengrave();
             return;
         }
         if (r == 100000)
@@ -996,7 +1059,7 @@ void OrgelEditor::menuItemSelected (int id, int)
         case 13: proc.setLoop (! proc.getLoop()); break;
         case 14: proc.addMarkHere(); break;
         case 15: proc.clearMarks(); break;
-        case 16: proc.applyFileRegistration = ! proc.applyFileRegistration; break;
+        case 16: proc.applyFileRegistration = ! proc.applyFileRegistration; proc.reengrave(); break;
         case 20: proc.organ.addManual(); break;
         case 21: proc.organ.clearRegistration(); break;
         case 22: proc.organ.setSpatial (! proc.organ.spatial); break;

@@ -54,6 +54,8 @@ public:
     void moveStop (int d, int s, int newIndex);
     void setStop (int d, int s, bool on);
     void toggleStop (int d, int s);
+    // removes the stops that pieces brought along (see Stop::temporary)
+    void removeTemporaryStops();
     void setCoupler (int c, bool on);
     void setDivisionVolume (int d, float v);
     void setDivisionExpression (int d, float v);

@@ -1,6 +1,7 @@
 // Orgelwerk command line: load a score, show what the organ makes of it, export it.
 //   orgelcli info  <file>
 //   orgelcli export <file> <target.ext> [<target2.ext> ...]
+//   orgelcli stops <file>   (stops the piece adds, and that they leave again)
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "engine/OrganEngine.h"
@@ -29,7 +30,8 @@ int main (int argc, char** argv)
 
     juce::String error;
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
-    auto piece = Formats::load (input, sf.get(), organ.getNumManuals(), organ.pedalIndex(), error);
+    // MIDI pages are set at export, with the organ's names and registration (as in the app)
+    auto piece = Formats::load (input, sf.get(), organ.getNumManuals(), organ.pedalIndex(), error, false);
     if (piece == nullptr)
     {
         std::cout << "load failed: " << error << "\n";
@@ -62,6 +64,36 @@ int main (int argc, char** argv)
         for (auto rs : e.registration)
             std::cout << " " << sf->presetName (rs.bank, rs.program) << (rs.octave != 0 ? " oct" + juce::String (rs.octave) : juce::String());
         std::cout << "\n";
+    }
+    if (cmd == "stops")
+    {
+        auto count = [&] {
+            int n = 0;
+            for (int d = 0; d < organ.getNumDivisions(); ++d)
+                n += (int) organ.getDivision (d).stops.size();
+            return n;
+        };
+        const int before = count();
+        for (auto& e : ScoreIO::registrationTimeline (*piece->score, map))
+            organ.applyRegistration (e.division, e.registration);
+        const int during = count();
+        // the old settings format: everything beyond the standard stops counts as added
+        auto xml = organ.toXml();
+        xml->removeAttribute ("version");
+        for (auto* d : xml->getChildWithTagNameIterator ("Division"))
+            for (auto* st : d->getChildWithTagNameIterator ("Stop"))
+                st->removeAttribute ("temporary");
+        OrganEngine restored;
+        restored.setSoundFont (sf);
+        restored.fromXml (*xml);
+        organ.removeTemporaryStops();
+        restored.removeTemporaryStops();
+        int restoredCount = 0;
+        for (int d = 0; d < restored.getNumDivisions(); ++d)
+            restoredCount += (int) restored.getDivision (d).stops.size();
+        std::cout << "  stops: " << before << " before, " << during << " with the piece, " << count() << " after the next piece, "
+                  << restoredCount << " after the next piece from old settings\n";
+        return count() == before && restoredCount == before ? 0 : 5;
     }
     if (cmd == "export")
     {

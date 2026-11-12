@@ -13,9 +13,23 @@ namespace NotationBuilder
         // which manual each part plays on: notes get that manual's colour, and "Man. II" etc.
         // is written where a hand changes manual
         std::vector<int> partDivision;
-        std::vector<juce::String> divisionLabels; // indexed by division
+        std::vector<juce::String> divisionNames; // indexed by division ("Hauptwerk", "Pedal"...)
+        std::vector<bool> divisionIsPedal;
         juce::String manualName = "Manual", pedalName = "Pedal";
+        // the registration the file asks for, from a beat on (stop names as printed)
+        struct RegistrationMark
+        {
+            double beat = 0;
+            int division = 0;
+            juce::StringArray stops;
+        };
+        std::vector<RegistrationMark> registrations;
     };
+
+    // "Prin.(pos.)8+4" sounding an octave lower -> "Prin. 16' + 8'" (with real foot marks)
+    juce::String printedStopName (const juce::String& presetName, int octave);
+    // how organ editions name a division: "Hw.", "Pos.", "Sw.", "Ped." or "Man. II"
+    juce::String divisionAbbreviation (const juce::String& name, int division, bool pedal);
 
     juce::String toMusicXML (const Score& score, const Options& options);
     juce::String toABC (const Score& score, const Options& options);

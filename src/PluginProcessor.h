@@ -139,12 +139,13 @@ public:
 
     // --- export -----------------------------------------------------------------
     Formats::ExportContext makeExportContext() const;
+    // sets the pages again (parts moved, registration shown or not); only if they are shown
+    void reengrave (bool evenIfNotShown = false);
     double getSampleRateForExport() const { return currentSampleRate > 0 ? currentSampleRate : 48000.0; }
 
 private:
     void timerCallback() override;
     void setPiece (std::shared_ptr<Piece> p);
-    void reengrave (bool evenIfNotShown = false);
 
     bool standalone = false;
     MidiInputRouter router;

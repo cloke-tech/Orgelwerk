@@ -7,8 +7,8 @@ static const juce::Colour highlightColour { 0xffc0392b };
 
 MusicDesk::MusicDesk (OrgelProcessor& p) : proc (p)
 {
-    prev.onClick = [this] { follow = false; followButton.setToggleState (false, juce::dontSendNotification); showPage (firstPage - visiblePages()); };
-    next.onClick = [this] { follow = false; followButton.setToggleState (false, juce::dontSendNotification); showPage (firstPage + visiblePages()); };
+    prev.onClick = [this] { stopFollowing(); showPage (currentPage() - visiblePages()); };
+    next.onClick = [this] { stopFollowing(); showPage (currentPage() + visiblePages()); };
     followButton.setToggleState (true, juce::dontSendNotification);
     followButton.onClick = [this] { follow = followButton.getToggleState(); };
     followButton.setColour (juce::ToggleButton::textColourId, theme::text);
@@ -18,9 +18,15 @@ MusicDesk::MusicDesk (OrgelProcessor& p) : proc (p)
     zoomButton.setTooltip ("Zwischen ganzer Seite und Seitenbreite (größere Noten, scrollt mit) umschalten");
     zoomButton.setClickingTogglesState (true);
     zoomButton.onClick = [this] {
+        // stay at the same page when switching
+        const int page = currentPage();
         zoomed = zoomButton.getToggleState();
-        scroll = scrollTarget = 0.0;
+        zoomButton.setButtonText (zoomed ? "Ganze Seite" : "Seitenbreite");
         turnFrom = -1;
+        if (zoomed)
+            scroll = scrollTarget = page;
+        else
+            firstPage = visiblePages() == 2 ? page - (page % 2) : page;
         updateNav();
         repaint();
     };
@@ -44,6 +50,8 @@ void MusicDesk::setPiece (std::shared_ptr<Piece> p)
     pagePool.removeAllJobs (false, 0);
     turnFrom = -1;
     scroll = scrollTarget = 0.0;
+    shownPageForLabel = -1;
+    followNote = {};
     active.clear();
     noteBeat.clear();
     timemapIndex = 0;
@@ -129,9 +137,85 @@ void MusicDesk::prefetch()
     if (piece == nullptr || piece->notation == nullptr || imageSize.x <= 0)
         return;
     const int n = visiblePages();
-    for (int i = firstPage; i < firstPage + 2 * n + (zoomed ? 1 : 0); ++i)
+    const int from = zoomed ? (int) std::floor (scroll) : firstPage;
+    for (int i = from; i < from + 2 * n + (zoomed ? 1 : 0); ++i)
         requestPage (i, imageSize.x, imageSize.y);
-    requestPage (firstPage - n, imageSize.x, imageSize.y);
+    requestPage (from - n, imageSize.x, imageSize.y);
+}
+
+int MusicDesk::pageCount() const
+{
+    return piece != nullptr && piece->notation != nullptr ? piece->notation->getPageCount() : 0;
+}
+
+// Page width: all pages one below the other, scrolled like a document. "scroll" counts pages
+// from the top of the first one (2.5 = the middle of the third page is at the top of the view).
+float MusicDesk::zoomPageHeight() const
+{
+    return viewArea().getWidth() * 2970.0f / 2100.0f;
+}
+
+float MusicDesk::zoomStride() const
+{
+    return zoomPageHeight() + 14.0f;
+}
+
+double MusicDesk::maxScroll() const
+{
+    const auto view = viewArea();
+    const double total = pageCount() * (double) zoomStride() - 14.0;
+    return juce::jmax (0.0, (total - view.getHeight()) / zoomStride());
+}
+
+juce::Rectangle<float> MusicDesk::pageRect (int index) const
+{
+    if (zoomed)
+    {
+        auto area = viewArea();
+        return { area.getX(), area.getY() + (float) ((index - scroll) * zoomStride()), area.getWidth(), zoomPageHeight() };
+    }
+    const int slot = index - firstPage;
+    if (slot < 0 || slot >= visiblePages())
+        return {};
+    return pageSlot (slot);
+}
+
+std::vector<int> MusicDesk::shownPages() const
+{
+    std::vector<int> out;
+    const int count = pageCount();
+    if (zoomed)
+    {
+        const auto view = viewArea();
+        for (int i = juce::jmax (0, (int) std::floor (scroll)); i < count; ++i)
+        {
+            auto r = pageRect (i);
+            if (r.getY() > view.getBottom())
+                break;
+            if (r.getBottom() >= view.getY())
+                out.push_back (i);
+        }
+        return out;
+    }
+    for (int s = 0; s < visiblePages(); ++s)
+        if (firstPage + s < count)
+            out.push_back (firstPage + s);
+    return out;
+}
+
+// the page the reader is looking at (the one in the middle of the view)
+int MusicDesk::currentPage() const
+{
+    if (! zoomed)
+        return firstPage;
+    const double centre = scroll + viewArea().getHeight() * 0.5 / zoomStride();
+    return juce::jlimit (0, juce::jmax (0, pageCount() - 1), (int) std::floor (centre));
+}
+
+void MusicDesk::stopFollowing()
+{
+    follow = false;
+    followButton.setToggleState (false, juce::dontSendNotification);
 }
 
 int MusicDesk::visiblePages() const
@@ -152,10 +236,7 @@ juce::Rectangle<float> MusicDesk::pageSlot (int slot) const
 {
     auto area = viewArea();
     if (zoomed)
-    {
-        const float w = area.getWidth(), h = w * 2970.0f / 2100.0f;
-        return { area.getX(), area.getY() - (float) scroll * juce::jmax (0.0f, h - area.getHeight()), w, h };
-    }
+        return { area.getX(), area.getY(), area.getWidth(), zoomPageHeight() };
     const int n = visiblePages();
     const float pageAspect = 2100.0f / 2970.0f;
     float h = area.getHeight();
@@ -212,32 +293,14 @@ void MusicDesk::paint (juce::Graphics& g)
         auto slot0 = pageSlot (0);
         imageSize = { juce::roundToInt (slot0.getWidth() * scale), juce::roundToInt (slot0.getHeight() * scale) };
     }
-    auto drawPage = [&] (int index, juce::Rectangle<float> slot, float alpha, bool withHighlights) {
-        if (index < 0 || index >= count)
-            return;
-        g.setColour (juce::Colours::black.withAlpha (0.35f * alpha));
-        g.fillRect (slot.translated (4, 5));
-        g.setColour (juce::Colour (0xfffdfbf5).withAlpha (alpha));
-        g.fillRect (slot);
-        auto* page = findPage (index);
-        if (page == nullptr || ! page->image.isValid())
-        {
-            requestPage (index, imageSize.x, imageSize.y);
-            return;
-        }
-        // the engraved page is rendered once per size in the background and here only copied;
-        // after a resize the old picture is stretched until the new one is ready
-        if (page->image.getWidth() != imageSize.x || page->image.getHeight() != imageSize.y)
-            requestPage (index, imageSize.x, imageSize.y);
-        g.setOpacity (alpha);
-        g.drawImage (page->image, slot);
-        g.setOpacity (1.0f);
-        // the notes sounding now, drawn on top in red
-        if (withHighlights)
-            for (auto& id : active)
-                if (auto it = page->ids.find (id); it != page->ids.end())
-                    drawHighlighted (g, *page, it->second, slot);
-    };
+    if (zoomed)
+    {
+        for (int index : shownPages())
+            drawPageAt (g, index, pageRect (index), 1.0f, true);
+        g.restoreState();
+        prefetch();
+        return;
+    }
     const int n = visiblePages();
     const double turn = turnFrom >= 0 ? (juce::Time::getMillisecondCounterHiRes() - turnStart) / 280.0 : 1.0;
     if (turn < 1.0)
@@ -245,15 +308,43 @@ void MusicDesk::paint (juce::Graphics& g)
         // page turn: the new pages glide in over the old ones and become solid
         const float e = 1.0f - (float) std::pow (1.0 - turn, 3.0);
         for (int sl = 0; sl < n; ++sl)
-            drawPage (turnFrom + sl, pageSlot (sl), 1.0f, false);
+            drawPageAt (g, turnFrom + sl, pageSlot (sl), 1.0f, false);
         for (int sl = 0; sl < n; ++sl)
-            drawPage (firstPage + sl, pageSlot (sl).translated ((1.0f - e) * (float) turnDirection * pageSlot (sl).getWidth() * 0.18f, 0.0f), e, true);
+            drawPageAt (g, firstPage + sl, pageSlot (sl).translated ((1.0f - e) * (float) turnDirection * pageSlot (sl).getWidth() * 0.18f, 0.0f), e, true);
     }
     else
         for (int sl = 0; sl < n; ++sl)
-            drawPage (firstPage + sl, pageSlot (sl), 1.0f, true);
+            drawPageAt (g, firstPage + sl, pageSlot (sl), 1.0f, true);
     g.restoreState();
     prefetch();
+}
+
+void MusicDesk::drawPageAt (juce::Graphics& g, int index, juce::Rectangle<float> slot, float alpha, bool withHighlights)
+{
+    if (index < 0 || index >= pageCount() || slot.isEmpty())
+        return;
+    g.setColour (juce::Colours::black.withAlpha (0.35f * alpha));
+    g.fillRect (slot.translated (4, 5));
+    g.setColour (juce::Colour (0xfffdfbf5).withAlpha (alpha));
+    g.fillRect (slot);
+    auto* page = findPage (index);
+    if (page == nullptr || ! page->image.isValid())
+    {
+        requestPage (index, imageSize.x, imageSize.y);
+        return;
+    }
+    // the engraved page is rendered once per size in the background and here only copied;
+    // after a resize the old picture is stretched until the new one is ready
+    if (page->image.getWidth() != imageSize.x || page->image.getHeight() != imageSize.y)
+        requestPage (index, imageSize.x, imageSize.y);
+    g.setOpacity (alpha);
+    g.drawImage (page->image, slot);
+    g.setOpacity (1.0f);
+    // the notes sounding now, drawn on top in red
+    if (withHighlights)
+        for (auto& id : active)
+            if (auto it = page->ids.find (id); it != page->ids.end())
+                drawHighlighted (g, *page, it->second, slot);
 }
 
 void MusicDesk::resized()
@@ -269,8 +360,17 @@ void MusicDesk::resized()
 
 void MusicDesk::showPage (int first)
 {
-    const int count = piece != nullptr && piece->notation != nullptr ? piece->notation->getPageCount() : 0;
+    const int count = pageCount();
     first = juce::jlimit (0, juce::jmax (0, count - 1), first);
+    if (zoomed)
+    {
+        // glide down (or up) to the top of that page
+        scrollTarget = juce::jlimit (0.0, maxScroll(), (double) first);
+        firstPage = first;
+        prunePages (first);
+        updateNav();
+        return;
+    }
     if (first == firstPage)
         return;
     // glide only between pages that are ready; a far jump just shows the new page
@@ -283,19 +383,31 @@ void MusicDesk::showPage (int first)
     else
         turnFrom = -1;
     firstPage = first;
-    if (zoomed)
-        scroll = scrollTarget = 0.0;
-    // keep a few pages around, drop the rest
-    for (auto it = pages.begin(); it != pages.end();)
-        it = std::abs (it->first - firstPage) > 4 ? pages.erase (it) : std::next (it);
+    prunePages (first);
     updateNav();
     repaint();
 }
 
+// keep a few pages around the shown ones, drop the rest
+void MusicDesk::prunePages (int around)
+{
+    for (auto it = pages.begin(); it != pages.end();)
+        it = std::abs (it->first - around) > 4 ? pages.erase (it) : std::next (it);
+}
+
 void MusicDesk::updateNav()
 {
-    const int count = piece != nullptr && piece->notation != nullptr ? piece->notation->getPageCount() : 0;
+    const int count = pageCount();
     const int n = visiblePages();
+    if (zoomed)
+    {
+        const int page = currentPage();
+        shownPageForLabel = page;
+        prev.setEnabled (scroll > 1.0e-3);
+        next.setEnabled (scroll < maxScroll() - 1.0e-3);
+        pageLabel.setText (count == 0 ? juce::String() : "Seite " + juce::String (page + 1) + " von " + juce::String (count), juce::dontSendNotification);
+        return;
+    }
     prev.setEnabled (firstPage > 0);
     next.setEnabled (firstPage + n < count);
     if (count == 0)
@@ -353,14 +465,15 @@ void MusicDesk::setHighlight (const juce::String& id, bool)
 // screen area of a note on a visible page (empty if it is not shown)
 juce::Rectangle<int> MusicDesk::areaOfNote (const juce::String& id)
 {
-    for (int s = 0; s < visiblePages(); ++s)
+    for (int index : shownPages())
     {
-        auto it = pages.find (firstPage + s);
+        auto it = pages.find (index);
         if (it == pages.end() || it->second.drawable == nullptr)
             continue;
         auto n = it->second.ids.find (id);
         if (n != it->second.ids.end())
-            return elementArea (it->second, n->second, pageSlot (s)).expanded (3.0f).getSmallestIntegerContainer();
+            return elementArea (it->second, n->second, pageRect (index)).expanded (3.0f).getSmallestIntegerContainer()
+                .getIntersection (viewArea().expanded (6.0f).toNearestInt());
     }
     return {};
 }
@@ -390,13 +503,17 @@ void MusicDesk::update (double dt)
             turnFrom = -1;
         repaint (viewArea().expanded (8.0f).toNearestInt());
     }
-    if (std::abs (scrollTarget - scroll) > 1.0e-4)
+    if (zoomed && std::abs (scrollTarget - scroll) > 1.0e-5)
     {
-        scroll += (scrollTarget - scroll) * (1.0 - std::exp (-dt * 10.0));
-        if (std::abs (scrollTarget - scroll) < 1.0e-4)
+        // eases out: quick at first, settling softly (about a third of a second)
+        scroll += (scrollTarget - scroll) * (1.0 - std::exp (-dt * 9.0));
+        if (std::abs (scrollTarget - scroll) * zoomStride() < 0.5)
             scroll = scrollTarget;
         repaint (viewArea().expanded (8.0f).toNearestInt());
+        if (currentPage() != shownPageForLabel)
+            updateNav();
     }
+    followInZoom();
     if (piece == nullptr || piece->notation == nullptr)
     {
         const bool busy = proc.isLoading() || proc.isEngraving();
@@ -450,25 +567,39 @@ void MusicDesk::update (double dt)
     {
         const int page = piece->notation->pageOfElement (newest);
         const int n = visiblePages();
-        if (page >= 0 && (page < firstPage || page >= firstPage + n))
+        if (! zoomed && page >= 0 && (page < firstPage || page >= firstPage + n))
             showPage (n == 2 ? page - (page % 2) : page);
-        if (zoomed && page == firstPage)
-            if (auto* pg = findPage (page))
-                if (auto it = pg->ids.find (newest); it != pg->ids.end() && pg->drawable != nullptr)
-                {
-                    // keep the playing system at about a third of the view height
-                    const auto view = viewArea();
-                    const float h = view.getWidth() * 2970.0f / 2100.0f;
-                    const auto full = juce::Rectangle<float> (view.getX(), view.getY(), view.getWidth(), h);
-                    const float y = elementArea (*pg, it->second, full).getCentreY() - view.getY();
-                    const float range = juce::jmax (1.0f, h - view.getHeight());
-                    const double target = juce::jlimit (0.0, 1.0, (double) (y - view.getHeight() * 0.35f) / range);
-                    if (std::abs (target - scrollTarget) * range > view.getHeight() * 0.3f)
-                        scrollTarget = target;
-                }
+        if (zoomed)
+            followNote = newest;
     }
     if (changed)
         repaint();
+}
+
+// Page width: keeps the playing system in the upper third of the view, gliding there when it
+// leaves the middle part. Checked every frame, so it also corrects itself once a page that was
+// still being drawn arrives.
+void MusicDesk::followInZoom()
+{
+    if (! zoomed || ! follow || followNote.isEmpty() || piece == nullptr || piece->notation == nullptr)
+        return;
+    const int page = piece->notation->pageOfElement (followNote);
+    if (page < 0)
+        return;
+    const auto view = viewArea();
+    double yInPage = 0; // where the note is on its page, in pixels from the page top
+    bool exact = false;
+    if (auto* pg = findPage (page))
+        if (auto it = pg->ids.find (followNote); it != pg->ids.end())
+        {
+            yInPage = elementArea (*pg, it->second, { view.getX(), 0.0f, view.getWidth(), zoomPageHeight() }).getCentreY();
+            exact = true;
+        }
+    const double target = juce::jlimit (0.0, maxScroll(), page + (yInPage - view.getHeight() * 0.3) / zoomStride());
+    const double yNow = (page - scrollTarget) * zoomStride() + yInPage; // with the glide already under way
+    if (yNow < view.getHeight() * 0.12 || yNow > view.getHeight() * 0.72 || (exact && ! followExact))
+        scrollTarget = target;
+    followExact = exact;
 }
 
 juce::Rectangle<float> MusicDesk::elementArea (Page& page, juce::Drawable* d, juce::Rectangle<float> slot) const
@@ -491,24 +622,33 @@ std::unique_ptr<juce::AccessibilityHandler> MusicDesk::createAccessibilityHandle
 
 void MusicDesk::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
 {
-    if (std::abs (w.deltaY) < 0.01f)
+    if (std::abs (w.deltaY) < 1.0e-4)
         return;
     if (zoomed)
     {
-        follow = false;
-        followButton.setToggleState (false, juce::dontSendNotification);
-        const double next = scrollTarget - w.deltaY * 0.6;
-        if (next < 0.0 && firstPage > 0) { showPage (firstPage - 1); scroll = scrollTarget = 1.0; }
-        else if (next > 1.0 && piece != nullptr && piece->notation != nullptr && firstPage + 1 < piece->notation->getPageCount()) { showPage (firstPage + 1); scroll = scrollTarget = 0.0; }
-        else scrollTarget = juce::jlimit (0.0, 1.0, next);
+        // scrolls like a document: a trackpad moves the page directly, a wheel glides
+        stopFollowing();
+        const double pixels = w.deltaY * (w.isSmooth ? 600.0 : 420.0);
+        const double base = w.isSmooth ? scroll : scrollTarget;
+        scrollTarget = juce::jlimit (0.0, maxScroll(), base - pixels / zoomStride());
+        if (w.isSmooth)
+            scroll = scrollTarget;
+        firstPage = currentPage();
         repaint();
+        updateNav();
         return;
     }
-    if (std::abs (w.deltaY) < 0.05f)
+    // whole pages: one turn per gesture, however many events a trackpad sends
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    if (now - lastWheelTurn < 450.0)
         return;
-    follow = false;
-    followButton.setToggleState (false, juce::dontSendNotification);
-    showPage (firstPage + (w.deltaY < 0 ? 1 : -1));
+    wheelAccumulated += w.deltaY;
+    if (std::abs (wheelAccumulated) < 0.12)
+        return;
+    stopFollowing();
+    showPage (firstPage + (wheelAccumulated < 0 ? visiblePages() : -visiblePages()));
+    wheelAccumulated = 0;
+    lastWheelTurn = now;
 }
 
 void MusicDesk::mouseDown (const juce::MouseEvent& e)
@@ -523,12 +663,12 @@ void MusicDesk::mouseDown (const juce::MouseEvent& e)
     // click on a note: continue playback from there
     if (piece == nullptr || piece->notation == nullptr || piece->score == nullptr)
         return;
-    for (int s = 0; s < visiblePages(); ++s)
+    for (int index : shownPages())
     {
-        auto slot = pageSlot (s);
-        if (! slot.contains (e.position))
+        auto slot = pageRect (index);
+        if (! slot.contains (e.position) || ! viewArea().contains (e.position))
             continue;
-        auto* page = findPage (firstPage + s);
+        auto* page = findPage (index);
         if (page == nullptr || page->drawable == nullptr)
             return;
         double bestDist = 1.0e9;

@@ -69,6 +69,7 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
     void animate();
+    void runDeskTest();
     juce::VBlankAttachment vblank;
     double lastAnimate = 0;
     void rebuildConsole();

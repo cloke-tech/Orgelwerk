@@ -386,6 +386,7 @@ std::shared_ptr<Piece> OrgelProcessor::getPiece() const
 void OrgelProcessor::setPiece (std::shared_ptr<Piece> p)
 {
     auto map = ScoreIO::autoAssign (*p->score, organ.getNumManuals(), organ.pedalIndex());
+    bool clearTemporary = false;
     {
         const juce::ScopedLock sl (organ.getLock());
         organ.releaseSource (srcPlayer);
@@ -398,7 +399,11 @@ void OrgelProcessor::setPiece (std::shared_ptr<Piece> p)
         partDivision = map;
         if (! sameFile && ! restorePending)
             marks.clear();
+        clearTemporary = ! sameFile && ! restorePending;
     }
+    // a new piece: the stops the last one brought along leave the console again
+    if (clearTemporary)
+        organ.removeTemporaryStops();
     compileMarks();
     compileTimeline();
     if (applyFileRegistration)
@@ -481,10 +486,17 @@ void OrgelProcessor::reengrave (bool evenIfNotShown)
     sendChangeMessage();
     auto pedal = partIsPedal();
     auto map = partDivision;
+    std::vector<DivisionRegistration> reg;
+    if (applyFileRegistration)
+    {
+        const juce::ScopedLock sl (organ.getLock());
+        reg = timeline;
+    }
+    auto info = Formats::OrganInfo::from (organ, std::move (reg));
     std::weak_ptr<int> token = alive;
-    pool.addJob ([this, p, pedal, map, token] {
+    pool.addJob ([this, p, pedal, map, info, token] {
         juce::String error;
-        auto n = Formats::engrave (*p->score, pedal, map, error);
+        auto n = Formats::engrave (*p->score, pedal, map, error, info);
         juce::MessageManager::callAsync ([this, p, n, error, token] {
             if (token.expired())
                 return;

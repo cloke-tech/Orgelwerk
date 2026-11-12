@@ -34,6 +34,9 @@ struct Stop
     int bank = 0, program = 0;
     int octave = 0; // sounds this many octaves above (+) or below (-) the key
     bool on = false;
+    // added only because a piece asked for it: removed again when the next piece is loaded
+    // (unless the player has pulled it by hand meanwhile)
+    bool temporary = false;
 
     // runtime only: one synth channel per side of the windchest
     // (C side: C D E F# G# A#, C# side: C# D# F G A B), panned apart like real pipes

@@ -44,12 +44,27 @@ private:
     int generation = 0;
     juce::Point<int> imageSize; // pixel size pages are rendered at (slot size times display scale)
     int visiblePages() const;
+    int pageCount() const;
     juce::Rectangle<float> pageSlot (int slot) const;
+    juce::Rectangle<float> pageRect (int index) const; // where a page is drawn now (empty: not shown)
+    std::vector<int> shownPages() const;
+    int currentPage() const;
+    float zoomPageHeight() const;
+    float zoomStride() const;
+    double maxScroll() const;
+    void prunePages (int around);
+    void stopFollowing();
+    void drawPageAt (juce::Graphics& g, int index, juce::Rectangle<float> slot, float alpha, bool withHighlights);
+    int shownPageForLabel = -1;
+    void followInZoom();
+    juce::String followNote; // the newest sounding note (page width follows it)
+    bool followExact = false;
+    double wheelAccumulated = 0, lastWheelTurn = 0;
     void setHighlight (const juce::String& id, bool on);
     juce::Rectangle<float> viewArea() const;
     juce::Rectangle<float> elementArea (Page& page, juce::Drawable* d, juce::Rectangle<float> slot) const;
     bool zoomed = false;
-    double scroll = 0.0; // 0..1 of the page height that is hidden above the view
+    double scroll = 0.0; // page width: pages scrolled past the top of the view (fractional)
     double scrollTarget = 0.0; // scroll glides towards this
     // page turn: the new pages slide in over the old ones
     int turnFrom = -1;

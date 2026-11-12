@@ -647,8 +647,30 @@ void OrganEngine::toggleStop (int d, int s)
         if (d < 0 || d >= (int) divisions.size() || s < 0 || s >= (int) divisions[(size_t) d].stops.size())
             return;
         now = ! divisions[(size_t) d].stops[(size_t) s].on;
+        divisions[(size_t) d].stops[(size_t) s].temporary = false; // pulled by hand: it stays
     }
     setStop (d, s, now);
+}
+
+void OrganEngine::removeTemporaryStops()
+{
+    bool any = false;
+    {
+        const juce::ScopedLock sl (lock);
+        for (auto& div : divisions)
+            for (int s = (int) div.stops.size() - 1; s >= 0; --s)
+                if (div.stops[(size_t) s].temporary)
+                {
+                    auto& st = div.stops[(size_t) s];
+                    stopVoice (div, st);
+                    freeChannel (div, st.channel);
+                    freeChannel (div, st.channel2);
+                    div.stops.erase (div.stops.begin() + s);
+                    any = true;
+                }
+    }
+    if (any)
+        sendChangeMessage();
 }
 
 void OrganEngine::setCoupler (int c, bool on)
@@ -826,7 +848,12 @@ void OrganEngine::applyRegistration (int d, const Registration& regStops)
                     found = s;
         }
         if (found < 0)
+        {
             found = addStop (d, rs.bank, rs.program, {}, false, rs.octave);
+            const juce::ScopedLock sl (lock);
+            if (found >= 0)
+                divisions[(size_t) d].stops[(size_t) found].temporary = true;
+        }
         if (found >= 0)
             wanted.push_back (found);
     }
@@ -1102,6 +1129,7 @@ std::unique_ptr<juce::XmlElement> OrganEngine::toXml() const
 {
     const juce::ScopedLock sl (lock);
     auto xml = std::make_unique<juce::XmlElement> ("Organ");
+    xml->setAttribute ("version", 2);
     xml->setAttribute ("reverb", reverb);
     xml->setAttribute ("master", master);
     xml->setAttribute ("transpose", transpose);
@@ -1125,6 +1153,8 @@ std::unique_ptr<juce::XmlElement> OrganEngine::toXml() const
             if (st.octave != 0)
                 s->setAttribute ("octave", st.octave);
             s->setAttribute ("on", st.on);
+            if (st.temporary)
+                s->setAttribute ("temporary", true);
         }
     }
     for (auto& c : couplers)
@@ -1171,6 +1201,17 @@ void OrganEngine::fromXml (const juce::XmlElement& xml)
                 st.program = s->getIntAttribute ("program");
                 st.octave = s->getIntAttribute ("octave", 0);
                 st.on = s->getBoolAttribute ("on");
+                st.temporary = s->getBoolAttribute ("temporary");
+                // settings from before version 2 did not know which stops pieces had added:
+                // everything beyond the standard stops of the division counts as added
+                if (xml.getIntAttribute ("version", 1) < 2)
+                {
+                    const auto& standard = d.pedal ? pedalStops : defaultStopsFor (juce::jlimit (1, 3, di + 1));
+                    bool isStandard = false;
+                    for (auto& [b, p] : standard)
+                        isStandard |= b == st.bank && p == st.program && st.octave == 0;
+                    st.temporary = ! isStandard;
+                }
                 assignChannel (di, st);
                 divisions.back().stops.push_back (st);
             }

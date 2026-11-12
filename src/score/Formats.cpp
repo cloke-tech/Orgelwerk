@@ -102,12 +102,50 @@ static bool runMuseScore (const juce::File& in, const juce::File& out, juce::Str
     return true;
 }
 
+OrganInfo OrganInfo::from (OrganEngine& organ, std::vector<DivisionRegistration> registration)
+{
+    OrganInfo info;
+    {
+        const juce::ScopedLock sl (organ.getLock());
+        for (int d = 0; d < organ.getNumDivisions(); ++d)
+        {
+            info.divisionNames.push_back (organ.getDivision (d).name);
+            info.divisionIsPedal.push_back (organ.getDivision (d).pedal);
+        }
+    }
+    info.registration = std::move (registration);
+    info.soundFont = organ.getSoundFont();
+    return info;
+}
+
+static void applyOrganInfo (NotationBuilder::Options& opt, const OrganInfo& info)
+{
+    opt.divisionNames = info.divisionNames;
+    opt.divisionIsPedal = info.divisionIsPedal;
+    if (info.soundFont == nullptr)
+        return;
+    for (auto& e : info.registration)
+    {
+        NotationBuilder::Options::RegistrationMark m;
+        m.beat = e.beat;
+        m.division = e.division;
+        for (auto rs : e.registration)
+        {
+            auto name = info.soundFont->presetName (rs.bank, rs.program);
+            if (name.isNotEmpty())
+                m.stops.addIfNotAlreadyThere (NotationBuilder::printedStopName (name, rs.octave));
+        }
+        opt.registrations.push_back (m);
+    }
+}
+
 std::shared_ptr<Notation> engrave (const Score& score, const std::vector<bool>& partIsPedal, const std::vector<int>& partDivision,
-                                   juce::String& error)
+                                   juce::String& error, const OrganInfo& organ)
 {
     NotationBuilder::Options opt;
     opt.partIsPedal = partIsPedal;
     opt.partDivision = partDivision;
+    applyOrganInfo (opt, organ);
     auto xml = NotationBuilder::toMusicXML (score, opt);
     auto n = std::make_shared<Notation>();
     if (! n->loadData (xml, "musicxml", error))
@@ -190,11 +228,17 @@ std::vector<ExportFormat> exportFormats()
     };
 }
 
+static OrganInfo organInfoOf (const ExportContext& ctx)
+{
+    return ctx.liveOrgan != nullptr ? OrganInfo::from (*ctx.liveOrgan, ctx.registrationTimeline) : OrganInfo {};
+}
+
 static NotationBuilder::Options builderOptions (const ExportContext& ctx)
 {
     NotationBuilder::Options o;
     o.partIsPedal = ctx.partIsPedal;
     o.partDivision = ctx.partDivision;
+    applyOrganInfo (o, organInfoOf (ctx));
     return o;
 }
 
@@ -395,7 +439,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
         && (fmt.id == "mei" || fmt.id == "svg" || fmt.id == "png" || fmt.id == "pdf"))
     {
         juce::String engraveError;
-        notation = engrave (score, ctx.partIsPedal, ctx.partDivision, engraveError);
+        notation = engrave (score, ctx.partIsPedal, ctx.partDivision, engraveError, organInfoOf (ctx));
     }
     auto writeText = [&] (const juce::String& text) {
         if (text.isEmpty())
