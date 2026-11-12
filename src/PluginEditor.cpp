@@ -265,6 +265,7 @@ void OrgelEditor::timerCallback()
     for (auto* p : plates)
         p->refresh();
     runDeskTest();
+    runScreenshot();
 
     const double len = proc.getLength();
     position.setEnabled (len > 0);
@@ -286,6 +287,81 @@ void OrgelEditor::timerCallback()
     auto piece = proc.getPiece();
     titleLabel.setText (proc.isLoading() ? juce::String (juce::String::fromUTF8 ("Lade…")) : (piece != nullptr ? piece->score->title : juce::String ("Orgelwerk")),
                         juce::dontSendNotification);
+}
+
+// ORGEL_SCREENSHOT=<folder>: plays the piece silently at ORGEL_SCREENSHOT_AT (a part of its
+// length) and saves pictures of the whole window (pages, then page width), then quits. The
+// volume and the view are put back before quitting, so the saved settings stay as they were.
+void OrgelEditor::runScreenshot()
+{
+    static const char* dir = std::getenv ("ORGEL_SCREENSHOT");
+    if (dir == nullptr)
+        return;
+    static int step = 0, wait = 0;
+    static float savedMaster = 0.75f;
+    static bool savedZoom = false;
+    auto piece = proc.getPiece();
+    if (piece == nullptr || proc.isLoading())
+        return;
+    auto save = [&] (const juce::String& name) {
+        auto img = createComponentSnapshot (getLocalBounds(), true, 2.0f);
+        juce::File f = juce::File (dir).getChildFile (name + ".png");
+        f.deleteFile();
+        juce::FileOutputStream out (f);
+        juce::PNGImageFormat().writeImageToStream (img, out);
+    };
+    ++wait;
+    switch (step)
+    {
+        case 0:
+            setSize (1440, 900);
+            savedMaster = proc.organ.master;
+            savedZoom = desk.isZoomed();
+            proc.organ.master = 0.0f; // silent
+            desk.setZoomed (false);
+            desk.setFollowing (true);
+            proc.requestEngraving();
+            step = 1;
+            wait = 0;
+            break;
+        case 1:
+            if (piece->notation == nullptr || proc.isEngraving() || wait < 10)
+                break;
+            {
+                const char* at = std::getenv ("ORGEL_SCREENSHOT_AT");
+                proc.seek ((at != nullptr ? juce::String (at).getDoubleValue() : 0.1) * proc.getLength());
+            }
+            proc.play();
+            step = 2;
+            wait = 0;
+            break;
+        case 2:
+            if (wait < 45)
+                break;
+            save ("orgelwerk");
+            desk.setZoomed (true);
+            step = 3;
+            wait = 0;
+            break;
+        case 3:
+            if (wait < 40)
+                break;
+            save ("orgelwerk-seitenbreite");
+            proc.pause();
+            desk.setZoomed (savedZoom);
+            proc.organ.master = savedMaster;
+            step = 4;
+            wait = 0;
+            break;
+        case 4:
+            if (wait < 5)
+                break;
+            juce::JUCEApplicationBase::quit();
+            step = 5;
+            break;
+        default:
+            break;
+    }
 }
 
 // ORGEL_DESKTEST=<folder>: sets the pages, switches to page width, jumps through the piece and

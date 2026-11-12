@@ -4,6 +4,10 @@ Pfeifenorgel als eigenständige App (macOS, Windows, Linux) und als Plugin für 
 (VST3 überall, Audio Unit auf dem Mac, LV2 unter Linux). Der Klang kommt aus einer
 SF2-SoundFont (eingebaut: **Jeux14**), die Noten stehen auf dem Notenpult in der Mitte.
 
+![Orgelwerk beim Abspielen: Prospekt, Registerzüge, Notenpult mit zwei Seiten, Manuale und Pedal](docs/screenshots/orgelwerk.png)
+
+![Notenpult in Seitenbreite: eigene Systeme je Manual, gespielte Noten rot, Registrierung als Text](docs/screenshots/orgelwerk-seitenbreite.png)
+
 ## Was die Orgel kann
 
 - **Spieltisch**: Pfeifenprospekt, Registerzüge links und rechts (Klick = ziehen/abstoßen,
@@ -16,9 +20,13 @@ SF2-SoundFont (eingebaut: **Jeux14**), die Noten stehen auf dem Notenpult in der
   Plugin der DAW-Eingang), Kanal (Omni oder 1–16), **MIDI lernen**, Lautstärke, Manual
   entfernen. CC 7/11 wirkt als Schwellpedal. Voreinstellung: Manual I = Kanal 1,
   II = 2, III = 3, Pedal = 4.
-- **Notenpult**: zeigt die Partitur (1 oder 2 Seiten, „Seitenbreite“ für große Noten),
-  markiert beim Abspielen die klingenden Noten, blättert mit, Klick auf eine Note springt
-  dorthin. Leertaste = Start/Pause, Pfeiltasten = ±5 s.
+- **Notenpult**: zeigt die Partitur (1 oder 2 Seiten, „Seitenbreite“ rollt die Seiten
+  durchgehend und hält die gespielte Zeile ganz im Bild), markiert beim Abspielen die
+  klingenden Noten, blättert mit, Klick auf eine Note springt dorthin. Leertaste =
+  Start/Pause, Pfeiltasten = ±5 s.
+- **Notenbild wie Orgelausgaben**: eigene Systeme je Manual und Pedal (leere werden pro Zeile
+  ausgeblendet; klassisch mit drei Systemen unter „Ansicht“), Registrierung aus der Datei als
+  Text, Werkkürzel (Hw., Pos., Sw.) bei Manualwechseln, Triolen, Triller und Mordente.
 - **Stimmen**: legt fest, welche Stimme des Stücks auf welchem Manual/Pedal spielt.
   Verdoppelte Kanäle in Orgel-MIDI-Dateien (ein Kanal pro Register) werden erkannt und als
   Registrierung gezogen; Programmwechsel mitten im Stück wechseln die Register dieses Werks.
