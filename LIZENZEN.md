@@ -1,5 +1,11 @@
 # Lizenzen und Herkunft
 
+## Orgelwerk
+
+Copyright © 2026 Domenik Cloke. Orgelwerk ist freie Software: Sie können es unter den
+Bedingungen der GNU Affero General Public License, Version 3, weitergeben und ändern
+(siehe [LICENSE](LICENSE)). Es wird ohne jede Gewährleistung bereitgestellt.
+
 ## Jeux 1.4 (eingebaute SoundFont `resources/Jeux14.sf2`)
 
 - Autor: John W. McCoy, Long Beach, CA, USA (RealMac@aol.com)

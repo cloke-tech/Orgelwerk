@@ -93,3 +93,12 @@ Die App öffnet eine Notendatei auch direkt beim Start: `Orgelwerk stueck.mid`.
   genutzt werden**. Damit ist auch Orgelwerk mit eingebauter Jeux-SoundFont nur für
   nichtkommerzielle Zwecke gedacht; eine andere SF2 lässt sich über **SoundFont** laden.
   Siehe [LIZENZEN.md](LIZENZEN.md).
+
+## Lizenz
+
+Orgelwerk ist freie Software unter der **GNU Affero General Public License, Version 3**
+(siehe [LICENSE](LICENSE)). Copyright © 2026 Domenik Cloke.
+
+Die eingebaute SoundFont Jeux 1.4 steht nicht unter der AGPL, sondern unter den Bedingungen
+ihres Autors: frei weitergeben ja, kommerziell nutzen nur mit seiner schriftlichen Erlaubnis.
+Einzelheiten zu allen Bestandteilen stehen in [LIZENZEN.md](LIZENZEN.md).
