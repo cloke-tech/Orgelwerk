@@ -94,6 +94,7 @@ bool Notation::loadFile (const juce::File& file, juce::String& error)
         std::lock_guard<std::recursive_mutex> g (mutex);
         std::lock_guard<std::mutex> gg (globalVerovioMutex());
         auto& t = toolkit();
+        applyOptions();
         t.SetInputFrom ("musicxml");
         if (! t.LoadZipDataBuffer (bytes, (int) mb.getSize()))
         {
@@ -103,7 +104,7 @@ bool Notation::loadFile (const juce::File& file, juce::String& error)
         lastData = {};
         lastFormat = "mxl";
         title = file.getFileNameWithoutExtension();
-        renderAll();
+        renderAll (false);
         return true;
     }
     if (! loadData (file.loadFileAsString(), formatForExtension (file.getFileExtension()), error))
@@ -119,6 +120,7 @@ bool Notation::loadData (const juce::String& data, const juce::String& format, j
     {
         std::lock_guard<std::mutex> gg (globalVerovioMutex());
         auto& t = toolkit();
+        applyOptions();
         t.SetInputFrom (format.isEmpty() ? "auto" : format.toStdString());
         if (! t.LoadData (data.toStdString()))
         {
@@ -129,12 +131,12 @@ bool Notation::loadData (const juce::String& data, const juce::String& format, j
         lastData = data;
         lastFormat = format;
         title = {};
-        renderAll();
+        renderAll (false);
     }
     return ! pages.empty();
 }
 
-void Notation::renderAll()
+void Notation::applyOptions()
 {
     auto& t = toolkit();
     juce::DynamicObject::Ptr opts = new juce::DynamicObject();
@@ -154,25 +156,41 @@ void Notation::renderAll()
     opts->setProperty ("pageMarginTop", 80);
     opts->setProperty ("pageMarginBottom", 80);
     t.SetOptions (juce::JSON::toString (juce::var (opts.get()), true).toStdString());
-    t.RedoLayout();
+}
+
+// The options are set before loading, so Verovio lays the pages out only once.
+void Notation::renderAll (bool relayout)
+{
+    auto& t = toolkit();
+    if (relayout)
+    {
+        applyOptions();
+        t.RedoLayout();
+    }
 
     pages.clear();
     notePage.clear();
     const int count = t.GetPageCount();
     for (int p = 1; p <= count; ++p)
     {
-        juce::String svg (juce::CharPointer_UTF8 (t.RenderToSVG (p, false).c_str()));
-        // remember which page each note is on (to turn pages while playing)
-        int idx = 0;
-        while ((idx = svg.indexOf (idx, "class=\"note\"")) >= 0)
+        const std::string raw = t.RenderToSVG (p, false);
+        // remember which page each note is on (to turn pages while playing);
+        // searched in the plain bytes, which stays linear on big pages
+        static const std::string marker = "class=\"note\"";
+        for (size_t idx = raw.find (marker); idx != std::string::npos; idx = raw.find (marker, idx + marker.size()))
         {
-            const int tagStart = svg.substring (0, idx).lastIndexOfChar ('<');
-            auto tag = svg.substring (tagStart, svg.indexOfChar (idx, '>'));
-            auto id = tag.fromFirstOccurrenceOf ("id=\"", false, false).upToFirstOccurrenceOf ("\"", false, false);
-            if (id.isNotEmpty())
-                notePage[id] = p - 1;
-            idx += 12;
+            const size_t tagStart = raw.rfind ('<', idx);
+            const size_t tagEnd = raw.find ('>', idx);
+            if (tagStart == std::string::npos || tagEnd == std::string::npos)
+                continue;
+            const size_t idPos = raw.find ("id=\"", tagStart);
+            if (idPos == std::string::npos || idPos > tagEnd)
+                continue;
+            const size_t idEnd = raw.find ('"', idPos + 4);
+            if (idEnd != std::string::npos && idEnd > idPos + 4 && idEnd < tagEnd)
+                notePage[juce::String (juce::CharPointer_UTF8 (raw.c_str() + idPos + 4), juce::CharPointer_UTF8 (raw.c_str() + idEnd))] = p - 1;
         }
+        juce::String svg (juce::CharPointer_UTF8 (raw.c_str()));
         pages.push_back (svg);
     }
 

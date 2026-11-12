@@ -11,7 +11,8 @@ class MusicDesk : public juce::Component
 public:
     explicit MusicDesk (OrgelProcessor& p);
     void setPiece (std::shared_ptr<Piece> piece);
-    void update(); // ~30x per second
+    void update (double dt); // once per display frame
+    ~MusicDesk() override;
     void paint (juce::Graphics& g) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent& e) override;
@@ -35,7 +36,13 @@ private:
     };
     void drawHighlighted (juce::Graphics& g, Page& page, juce::Drawable* d, juce::Rectangle<float> slot);
     juce::Rectangle<int> areaOfNote (const juce::String& id);
-    Page* getPage (int index);
+    Page* findPage (int index); // a page that is ready, or nullptr (it is then requested)
+    void requestPage (int index, int width, int height);
+    void prefetch();
+    juce::ThreadPool pagePool { juce::ThreadPoolOptions{}.withThreadName ("Notenseiten").withNumberOfThreads (1) };
+    std::set<int> pending;
+    int generation = 0;
+    juce::Point<int> imageSize; // pixel size pages are rendered at (slot size times display scale)
     int visiblePages() const;
     juce::Rectangle<float> pageSlot (int slot) const;
     void setHighlight (const juce::String& id, bool on);
@@ -43,6 +50,11 @@ private:
     juce::Rectangle<float> elementArea (Page& page, juce::Drawable* d, juce::Rectangle<float> slot) const;
     bool zoomed = false;
     double scroll = 0.0; // 0..1 of the page height that is hidden above the view
+    double scrollTarget = 0.0; // scroll glides towards this
+    // page turn: the new pages slide in over the old ones
+    int turnFrom = -1;
+    double turnStart = 0;
+    int turnDirection = 1;
     void updateNav();
 
     OrgelProcessor& proc;

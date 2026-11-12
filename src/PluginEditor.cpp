@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "ui/Profile.h"
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
 
@@ -97,7 +98,9 @@ OrgelEditor::OrgelEditor (OrgelProcessor& p)
 
     proc.organ.addChangeListener (this);
     proc.addChangeListener (this);
+    profile::mark ("editor: before console");
     rebuildConsole();
+    profile::mark ("editor: console built");
     shownPiece = proc.getPiece();
     desk.setPiece (shownPiece);
 
@@ -114,7 +117,8 @@ OrgelEditor::OrgelEditor (OrgelProcessor& p)
     if (proc.isStandalone())
         optionsButton.setVisible (false); // in the menu bar instead
     setWantsKeyboardFocus (true);
-    startTimerHz (30);
+    vblank = juce::VBlankAttachment (this, [this] { animate(); });
+    startTimerHz (15);
 }
 
 OrgelEditor::~OrgelEditor()
@@ -211,7 +215,7 @@ void OrgelEditor::changeListenerCallback (juce::ChangeBroadcaster*)
         rightJamb.refreshStates();
         rail.refreshStates();
         for (auto* p : plates)
-            p->repaint();
+            p->refresh();
     }
     auto piece = proc.getPiece();
     if (piece != shownPiece)
@@ -225,15 +229,40 @@ void OrgelEditor::changeListenerCallback (juce::ChangeBroadcaster*)
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Orgelwerk", msg);
 }
 
-void OrgelEditor::timerCallback()
+// Everything that moves runs once per display frame (60 or 120 times a second), in step with the screen.
+void OrgelEditor::animate()
 {
+    ORGEL_PROFILE_SCOPE ("editor.animate");
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    if (profile::enabled() && lastAnimate > 0)
+        profile::record ("frame.gap", now - lastAnimate);
+    const double dt = lastAnimate > 0 ? juce::jlimit (0.0, 0.1, (now - lastAnimate) / 1000.0) : 1.0 / 60.0;
+    lastAnimate = now;
     for (auto* k : keyboards)
         k->update();
-    updateFacade();
-    desk.update();
+    updateFacade (dt);
+    desk.update (dt);
+}
+
+void OrgelEditor::timerCallback()
+{
+    ORGEL_PROFILE_SCOPE ("editor.timer");
+    // no display frames (window hidden, or a host without them): keep things moving anyway
+    if (juce::Time::getMillisecondCounterHiRes() - lastAnimate > 120.0)
+        animate();
+    if (profile::enabled())
+    {
+        // ORGEL_AUTOPLAY=1: set the pages and play as soon as a piece is there (for measuring)
+        static bool started = false;
+        if (! started && std::getenv ("ORGEL_AUTOPLAY") != nullptr && proc.getPiece() != nullptr && ! proc.isLoading())
+        {
+            started = true;
+            proc.requestEngraving();
+            proc.play();
+        }
+    }
     for (auto* p : plates)
-        if (proc.getMidiLearnDivision() == p->division)
-            p->repaint();
+        p->refresh();
 
     const double len = proc.getLength();
     position.setEnabled (len > 0);
@@ -380,7 +409,7 @@ void OrgelEditor::drawFacade (juce::Graphics& g, juce::Rectangle<float> area)
     g.fillRect (area.withY (area.getBottom() - 6.0f).withHeight (6.0f));
 }
 
-void OrgelEditor::updateFacade()
+void OrgelEditor::updateFacade (double dt)
 {
     if (pipes.empty())
         return;
@@ -400,7 +429,9 @@ void OrgelEditor::updateFacade()
         target[best] = juce::jmin (1.0f, target[best] + 0.35f + 0.12f * counts[(size_t) k]);
     }
     const double now = juce::Time::getMillisecondCounterHiRes();
-    bool changed = false;
+    // the glow fades the same speed at any frame rate (it used to lose 18 % per 30 Hz tick)
+    const float decay = (float) std::pow (0.82, dt * 30.0);
+    juce::Rectangle<float> dirty;
     for (size_t i = 0; i < pipes.size(); ++i)
     {
         auto& p = pipes[i];
@@ -408,13 +439,21 @@ void OrgelEditor::updateFacade()
         if (target[i] > p.lastTarget + 0.2f)
             p.popStart = now;
         p.lastTarget = target[i];
-        const float next = target[i] > p.level ? target[i] : p.level * 0.82f;
+        const float next = target[i] > p.level ? target[i] : p.level * decay;
         const float clipped = next < 0.02f ? 0.0f : next;
-        changed |= std::abs (clipped - p.level) > 0.005f || now - p.popStart < 700.0;
+        const bool moving = std::abs (clipped - p.level) > 0.002f || now - p.popStart < 700.0 || (p.level > 0.0f) != (clipped > 0.0f);
         p.level = clipped;
+        if (moving || p.wasMoving)
+        {
+            // the pipe's column, wide enough for the halo around its mouth
+            const float halo = p.body.getWidth() * 3.4f;
+            auto col = juce::Rectangle<float> (p.body.getCentreX() - halo, 0.0f, halo * 2.0f, (float) facadeArea.getHeight());
+            dirty = dirty.isEmpty() ? col : dirty.getUnion (col);
+        }
+        p.wasMoving = moving;
     }
-    if (changed)
-        repaint (facadeArea);
+    if (! dirty.isEmpty())
+        repaint (dirty.translated ((float) facadeArea.getX(), (float) facadeArea.getY()).getSmallestIntegerContainer().getIntersection (facadeArea));
 }
 
 void OrgelEditor::drawPipe (juce::Graphics& g, const FacadePipe& p, juce::Point<float> offset, double nowMs)
@@ -495,6 +534,14 @@ void OrgelEditor::paintFacadeGlow (juce::Graphics& g)
 
 void OrgelEditor::paint (juce::Graphics& g)
 {
+    ORGEL_PROFILE_SCOPE ("editor.paint");
+    if (profile::enabled())
+    {
+        static bool first = true;
+        if (first)
+            std::fprintf (stderr, "[profile] first paint %.0f ms after start\n", juce::Time::getMillisecondCounterHiRes() - profile::startMs());
+        first = false;
+    }
     g.fillAll (theme::woodDark);
     // toolbar
     auto bar = getLocalBounds().removeFromTop (48).toFloat();

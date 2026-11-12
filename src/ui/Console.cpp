@@ -1,4 +1,5 @@
 #include "Console.h"
+#include "Profile.h"
 #include "../score/NotationBuilder.h"
 
 namespace orgel
@@ -26,9 +27,26 @@ void StopKnob::refresh()
         repaint();
 }
 
+// The knob is drawn once per state into a picture and then only copied: laying out the
+// engraved name is slow, and a registration change from the file flips many knobs at once.
 void StopKnob::paint (juce::Graphics& g)
 {
-    auto b = getLocalBounds().toFloat();
+    const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
+    auto& img = cache[on ? 1 : 0];
+    const int iw = juce::roundToInt ((float) getWidth() * scale), ih = juce::roundToInt ((float) getHeight() * scale);
+    if (! img.isValid() || img.getWidth() != iw || img.getHeight() != ih || cacheName[on ? 1 : 0] != name)
+    {
+        img = juce::Image (juce::Image::ARGB, juce::jmax (1, iw), juce::jmax (1, ih), true);
+        juce::Graphics ig (img);
+        ig.addTransform (juce::AffineTransform::scale (scale));
+        drawFace (ig, getLocalBounds().toFloat(), on);
+        cacheName[on ? 1 : 0] = name;
+    }
+    g.drawImageTransformed (img, juce::AffineTransform::scale (1.0f / scale));
+}
+
+void StopKnob::drawFace (juce::Graphics& g, juce::Rectangle<float> b, bool on) const
+{
     const float size = juce::jmin (b.getWidth(), b.getHeight());
     auto face = b.withSizeKeepingCentre (size, size).reduced (size * (on ? 0.03f : 0.09f));
     const auto c = face.getCentre();
@@ -190,7 +208,11 @@ void AddStopButton::mouseDown (const juce::MouseEvent&)
 }
 
 //==============================================================================
-StopJamb::StopJamb (OrgelProcessor& p) : proc (p) {}
+StopJamb::StopJamb (OrgelProcessor& p) : proc (p)
+{
+    // kept as a picture: only knobs that change are drawn again
+    setBufferedToImage (true);
+}
 
 void StopJamb::setDivisions (std::vector<int> indices)
 {
@@ -218,6 +240,7 @@ void StopJamb::refreshStates()
 
 void StopJamb::paint (juce::Graphics& g)
 {
+    ORGEL_PROFILE_SCOPE ("jamb.paint");
     auto b = getLocalBounds().toFloat();
     theme::fillWood (g, b, theme::wood, true);
     g.setColour (juce::Colours::black.withAlpha (0.4f));
@@ -299,6 +322,7 @@ void CouplerRail::Tab::paintButton (juce::Graphics& g, bool over, bool)
 
 CouplerRail::CouplerRail (OrgelProcessor& p) : proc (p)
 {
+    setBufferedToImage (true);
     setButton = std::make_unique<Tab> ("S");
     setButton->setTooltip (juce::String::fromUTF8 ("Setzer: S drücken, dann eine Nummer, um die aktuelle Registrierung zu speichern"));
     setButton->setClickingTogglesState (true);
@@ -461,6 +485,7 @@ int KeyboardView::keyAt (juce::Point<float> p) const
 
 void KeyboardView::paint (juce::Graphics& g)
 {
+    ORGEL_PROFILE_SCOPE ("keyboard.paint");
     auto b = getLocalBounds().toFloat();
     g.setColour (theme::woodDark.darker (0.5f));
     g.fillRect (b);
@@ -554,38 +579,56 @@ void KeyboardView::mouseUp (const juce::MouseEvent&)
 //==============================================================================
 DivisionPlate::DivisionPlate (OrgelProcessor& p, int d) : division (d), proc (p)
 {
+    setBufferedToImage (true);
     setTooltip (juce::String::fromUTF8 ("Klicken: Name, MIDI-Eingang und Kanal, Lautstärke"));
+}
+
+DivisionPlate::Texts DivisionPlate::texts() const
+{
+    Texts t;
+    const juce::ScopedLock sl (proc.organ.getLock());
+    if (division >= proc.organ.getNumDivisions())
+        return t;
+    auto& d = proc.organ.getDivision (division);
+    t.valid = true;
+    t.pedal = d.pedal;
+    t.learning = proc.getMidiLearnDivision() == division;
+    t.title = d.pedal ? d.name : romanNumeral (division + 1) + "  " + d.name;
+    if (t.learning)
+        t.midi = juce::String::fromUTF8 ("Taste drücken…");
+    else
+    {
+        auto dev = d.midi.device.isEmpty() ? juce::String (juce::String::fromUTF8 ("Alle Eingänge"))
+                                           : (d.midi.device == MidiAssign::hostDevice ? juce::String ("DAW") : d.midi.deviceName);
+        t.midi = dev + juce::String::fromUTF8 (" · ") + (d.midi.channel == 0 ? juce::String ("Omni") : "Kanal " + juce::String (d.midi.channel));
+    }
+    return t;
+}
+
+// repaints only when something on the plate changed (it is kept as a picture)
+void DivisionPlate::refresh()
+{
+    auto t = texts();
+    const auto key = t.title + "|" + t.midi + (t.learning ? "L" : "");
+    if (key != shownKey)
+    {
+        shownKey = key;
+        repaint();
+    }
 }
 
 void DivisionPlate::paint (juce::Graphics& g)
 {
-    juce::String title, midi;
-    {
-        const juce::ScopedLock sl (proc.organ.getLock());
-        if (division >= proc.organ.getNumDivisions())
-            return;
-        auto& d = proc.organ.getDivision (division);
-        title = d.pedal ? d.name : romanNumeral (division + 1) + "  " + d.name;
-        const bool learning = proc.getMidiLearnDivision() == division;
-        if (learning)
-            midi = juce::String::fromUTF8 ("Taste drücken…");
-        else
-        {
-            auto dev = d.midi.device.isEmpty() ? juce::String (juce::String::fromUTF8 ("Alle Eingänge"))
-                                               : (d.midi.device == MidiAssign::hostDevice ? juce::String ("DAW") : d.midi.deviceName);
-            midi = dev + juce::String::fromUTF8 (" · ") + (d.midi.channel == 0 ? juce::String ("Omni") : "Kanal " + juce::String (d.midi.channel));
-        }
-    }
+    const auto t = texts();
+    if (! t.valid)
+        return;
+    const auto& title = t.title;
+    const auto& midi = t.midi;
     auto r = getLocalBounds().toFloat().reduced (3.0f, 3.0f);
     auto plate = r.removeFromTop (juce::jmin (22.0f, r.getHeight() * 0.55f));
     theme::drawPlate (g, plate, title, 13.0f);
     // the colour this manual's notes have on the music desk
-    bool pedal = false;
-    {
-        const juce::ScopedLock sl (proc.organ.getLock());
-        pedal = division < proc.organ.getNumDivisions() && proc.organ.getDivision (division).pedal;
-    }
-    if (! pedal)
+    if (! t.pedal)
     {
         auto dot = plate.removeFromLeft (plate.getHeight()).reduced (5.0f);
         g.setColour (juce::Colour::fromString ("FF" + NotationBuilder::manualColour (division).substring (1)));
@@ -593,7 +636,7 @@ void DivisionPlate::paint (juce::Graphics& g)
         g.setColour (juce::Colours::white.withAlpha (0.8f));
         g.drawEllipse (dot, 1.2f);
     }
-    g.setColour (proc.getMidiLearnDivision() == division ? theme::activeKey : theme::text.withAlpha (0.8f));
+    g.setColour (t.learning ? theme::activeKey : theme::text.withAlpha (0.8f));
     g.setFont (theme::sans (11.0f));
     g.drawFittedText (midi, r.toNearestInt(), juce::Justification::centred, 2);
 }

@@ -51,7 +51,8 @@ public:
     static juce::String inlineSymbols (const juce::String& svg);
 
 private:
-    void renderAll();
+    void applyOptions();
+    void renderAll (bool relayout);
     vrv::Toolkit& toolkit();
 
     std::unique_ptr<vrv::Toolkit> tk;

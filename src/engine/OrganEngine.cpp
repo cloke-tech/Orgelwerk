@@ -326,6 +326,7 @@ void OrganEngine::renderLocked (juce::AudioBuffer<float>& out, const std::vector
             keyUpLocked (e.division, e.key, e.source);
     }
     renderRange (pos, numSamples);
+    publishUiState();
 
     reverbSmoothed.setTargetValue (reverb);
     masterSmoothed.setTargetValue (master);
@@ -698,8 +699,49 @@ void OrganEngine::setTremulant (int d, bool on)
     sendChangeMessage();
 }
 
+void OrganEngine::publishUiState()
+{
+    const int nd = juce::jmin ((int) divisions.size(), maxUiDivisions);
+    for (int d = 0; d < nd; ++d)
+    {
+        uint64_t w[2] = { 0, 0 };
+        auto& held = divisions[(size_t) d].held;
+        for (int k = 0; k < 128; ++k)
+            if (held[(size_t) k] != 0)
+                w[k >> 6] |= uint64_t (1) << (k & 63);
+        uiHeld[(size_t) d][0].store (w[0], std::memory_order_relaxed);
+        uiHeld[(size_t) d][1].store (w[1], std::memory_order_relaxed);
+    }
+    std::array<uint8_t, 128> counts {};
+    for (auto& d : divisions)
+        for (auto& st : d.stops)
+            if (st.sounding.any())
+                for (int k = 0; k < 128; ++k)
+                    if (st.sounding[(size_t) k])
+                        counts[(size_t) k] = (uint8_t) juce::jmin (255, counts[(size_t) k] + 1);
+    for (int i = 0; i < 16; ++i)
+    {
+        uint64_t w = 0;
+        for (int b = 0; b < 8; ++b)
+            w |= uint64_t (counts[(size_t) (i * 8 + b)]) << (b * 8);
+        uiSounding[(size_t) i].store (w, std::memory_order_relaxed);
+    }
+    uiPublishedMs.store (juce::Time::getMillisecondCounterHiRes(), std::memory_order_release);
+}
+
 std::array<uint8_t, 128> OrganEngine::getSoundingCounts() const
 {
+    if (uiStateFresh())
+    {
+        std::array<uint8_t, 128> counts {};
+        for (int i = 0; i < 16; ++i)
+        {
+            const auto w = uiSounding[(size_t) i].load (std::memory_order_relaxed);
+            for (int b = 0; b < 8; ++b)
+                counts[(size_t) (i * 8 + b)] = (uint8_t) ((w >> (b * 8)) & 0xff);
+        }
+        return counts;
+    }
     const juce::ScopedLock sl (lock);
     std::array<uint8_t, 128> counts {};
     for (auto& d : divisions)
@@ -911,6 +953,17 @@ void OrganEngine::silenceAll()
 
 std::bitset<128> OrganEngine::getHeldKeys (int d) const
 {
+    if (d >= 0 && d < maxUiDivisions && uiStateFresh())
+    {
+        std::bitset<128> b;
+        for (int half = 0; half < 2; ++half)
+        {
+            const auto w = uiHeld[(size_t) d][(size_t) half].load (std::memory_order_relaxed);
+            for (int k = 0; k < 64; ++k)
+                b[(size_t) (half * 64 + k)] = ((w >> k) & 1) != 0;
+        }
+        return b;
+    }
     const juce::ScopedLock sl (lock);
     std::bitset<128> b;
     if (d >= 0 && d < (int) divisions.size())

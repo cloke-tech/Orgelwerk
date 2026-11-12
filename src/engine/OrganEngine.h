@@ -5,6 +5,7 @@
 #include "OrganModel.h"
 #include "SoundFont.h"
 #include "Limiter.h"
+#include <atomic>
 
 struct tsf;
 
@@ -129,6 +130,15 @@ private:
     void silenceAll();
 
     juce::CriticalSection lock;
+
+    // What the keyboards and the pipe facade show, published by the audio thread after every
+    // block, so the screen can read it many times a second without taking the lock.
+    void publishUiState();
+    static constexpr int maxUiDivisions = 16;
+    std::array<std::array<std::atomic<uint64_t>, 2>, maxUiDivisions> uiHeld {};
+    std::array<std::atomic<uint64_t>, 16> uiSounding {};
+    std::atomic<double> uiPublishedMs { 0.0 };
+    bool uiStateFresh() const { return juce::Time::getMillisecondCounterHiRes() - uiPublishedMs.load (std::memory_order_acquire) < 150.0; }
     std::shared_ptr<SoundFont> soundFont;
     double sampleRate = 48000.0;
     std::vector<float> interleaved;

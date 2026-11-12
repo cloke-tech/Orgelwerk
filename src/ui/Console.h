@@ -17,10 +17,13 @@ public:
     const int division, stop;
 
 private:
+    void drawFace (juce::Graphics& g, juce::Rectangle<float> b, bool drawn) const;
     OrgelProcessor& proc;
     juce::String name;
     bool on = false;
     StopFamily family = StopFamily::Principal;
+    juce::Image cache[2];
+    juce::String cacheName[2];
 };
 
 // "+" knob that adds an SF2 preset as a new stop.
@@ -121,11 +124,19 @@ public:
     void paint (juce::Graphics& g) override;
     void mouseDown (const juce::MouseEvent&) override;
     void openSettings();
+    void refresh();
     std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
     const int division;
 
 private:
+    struct Texts
+    {
+        bool valid = false, pedal = false, learning = false;
+        juce::String title, midi;
+    };
+    Texts texts() const;
     OrgelProcessor& proc;
+    juce::String shownKey;
 };
 
 class DivisionSettings : public juce::Component, private juce::Timer

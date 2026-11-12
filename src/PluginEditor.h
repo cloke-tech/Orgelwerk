@@ -68,6 +68,9 @@ public:
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
+    void animate();
+    juce::VBlankAttachment vblank;
+    double lastAnimate = 0;
     void rebuildConsole();
     juce::String structureSignature() const;
     void drawFacade (juce::Graphics& g, juce::Rectangle<float> area);
@@ -112,10 +115,11 @@ private:
         float level = 0, lastTarget = 0;
         double popStart = -1.0e9; // ms, when the pipe last started to speak
         float baseY = 0;
+        bool wasMoving = false;
     };
     void drawPipe (juce::Graphics& g, const FacadePipe& p, juce::Point<float> offset, double nowMs);
     std::vector<FacadePipe> pipes;
-    void updateFacade();
+    void updateFacade (double dt);
     void paintFacadeGlow (juce::Graphics& g);
     juce::Rectangle<int> facadeArea, consoleArea;
     juce::Image facadeCache;

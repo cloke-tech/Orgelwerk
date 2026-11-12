@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "ui/Profile.h"
 #include "PluginEditor.h"
 #include <set>
 #include <map>
@@ -107,14 +108,24 @@ void MidiInputRouter::handleIncomingMidiMessage (juce::MidiInput* source, const 
 OrgelProcessor::OrgelProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
+    profile::startMsRef();
     standalone = juce::JUCEApplicationBase::isStandaloneApp();
     organ.setSoundFont (SoundFont::loadBuiltIn());
+    profile::mark ("soundfont loaded");
     organ.setDefaultDisposition();
+    profile::mark ("disposition set");
     events.reserve (8192);
     pendingRegistrationsAudio.reserve (256);
     if (standalone)
     {
-        router.start();
+        // opening the MIDI inputs takes the system about half a second the first time:
+        // done just after the window is on screen instead of before
+        juce::Timer::callAfterDelay (150, [this, token = std::weak_ptr<int> (alive)] {
+            if (token.expired())
+                return;
+            router.start();
+            profile::mark ("midi inputs opened");
+        });
         // a score given on the command line (or via "Open with") is loaded at start
         if (auto* app = juce::JUCEApplicationBase::getInstance())
             for (auto& arg : app->getCommandLineParameterArray())
@@ -132,6 +143,7 @@ OrgelProcessor::OrgelProcessor()
             }
     }
     startTimerHz (30);
+    profile::mark ("processor ready");
 }
 
 OrgelProcessor::~OrgelProcessor()
@@ -150,6 +162,7 @@ bool OrgelProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 
 void OrgelProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    profile::mark ("prepareToPlay start");
     currentSampleRate = sampleRate;
     organ.prepare (sampleRate, samplesPerBlock);
     setLatencySamples (organ.getLatencySamples());
@@ -680,6 +693,7 @@ void OrgelProcessor::getStateInformation (juce::MemoryBlock& destData)
 
 void OrgelProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
+    profile::mark ("restore state start");
     auto xml = getXmlFromBinary (data, sizeInBytes);
     if (xml == nullptr || ! xml->hasTagName ("Orgelwerk"))
         return;
