@@ -715,7 +715,7 @@ juce::String toMusicXML (const Score& score, const Options& opt)
     // Where a hand changes manual: walk each manual staff in time order (all voices together)
     // and mark the places where the manual differs from what that staff played just before,
     // unless the old manual is still sounding there (two manuals at once need no label).
-    std::set<std::tuple<int, int, int>> labelAt; // measure, staff, position
+    std::map<std::tuple<int, int, int>, int> labelAt; // (measure, staff, position) -> division
     if (q.manualsUsed > 1)
         for (int k = 0; k < (int) q.staves.size(); ++k)
         {
@@ -741,7 +741,7 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                         oldStillSounding |= o != e && o->notes.front().division == current && o->start < e->start + e->dur
                                             && o->start + o->dur > e->start;
                     if (! oldStillSounding)
-                        labelAt.insert ({ mi, k, e->start });
+                        labelAt[{ mi, k, e->start }] = dv;
                     current = dv;
                 }
             }
@@ -813,11 +813,13 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                             o << "<duration>" << e.dur << "</duration>";
                         };
                         // a hand moves to another manual: say so at the staff, as organ editions do
-                        if (! e.rest && part == 0 && ! e.notes.empty() && labelAt.count ({ mi, k, e.start })
+                        const auto labelIt = labelAt.find ({ mi, k, e.start });
+                        if (! e.rest && part == 0 && labelIt != labelAt.end() && labelIt->second >= 0
                             && labelled.insert ({ mi, k, e.start }).second)
                         {
-                            const int dv = e.notes.front().division;
-                            auto label = dv < (int) opt.divisionLabels.size() ? opt.divisionLabels[(size_t) dv] : "Man. " + romanNumeral (dv + 1);
+                            const int dv = labelIt->second;
+                            auto label = juce::isPositiveAndBelow (dv, (int) opt.divisionLabels.size()) ? opt.divisionLabels[(size_t) dv]
+                                                                                                        : "Man. " + romanNumeral (dv + 1);
                             o << "      <direction placement=\"" << (k == 0 ? "above" : "below") << "\"><direction-type><words font-weight=\"bold\" color=\""
                               << manualColour (dv) << "\">" << esc (label) << "</words></direction-type><staff>" << (k + 1) << "</staff></direction>\n";
                         }

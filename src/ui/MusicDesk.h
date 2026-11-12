@@ -17,6 +17,7 @@ public:
     void mouseDown (const juce::MouseEvent& e) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override;
     void showPage (int first);
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
     bool isZoomed() const { return zoomed; }
     void setZoomed (bool z) { zoomButton.setToggleState (z, juce::sendNotification); }
     bool isFollowing() const { return follow; }
@@ -30,7 +31,10 @@ private:
         // colours before highlighting (notes keep their manual colour)
         std::map<juce::DrawableShape*, std::pair<juce::FillType, juce::FillType>> shapeColours;
         std::map<juce::DrawableText*, juce::Colour> textColours;
+        juce::Image image; // the page rendered once at its current size
     };
+    void drawHighlighted (juce::Graphics& g, Page& page, juce::Drawable* d, juce::Rectangle<float> slot);
+    juce::Rectangle<int> areaOfNote (const juce::String& id);
     Page* getPage (int index);
     int visiblePages() const;
     juce::Rectangle<float> pageSlot (int slot) const;
@@ -57,5 +61,8 @@ private:
     juce::ToggleButton followButton { juce::String::fromUTF8 ("Mitblättern") };
     juce::Label pageLabel;
     juce::String status;
+    bool wasBusy = false;
+    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { repaint(); }
 };
 } // namespace orgel

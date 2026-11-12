@@ -27,7 +27,9 @@ namespace Formats
 
     // Loads any supported file. Runs on a background thread.
     // partIsPedal is used for engraving MIDI files (which part goes to the pedal staff).
-    std::unique_ptr<Piece> load (const juce::File& f, const SoundFont* sf, int numManuals, int pedalIndex, juce::String& error);
+    // engraveMidi = false: MIDI files are only read (fast); their pages are set later on request
+    std::unique_ptr<Piece> load (const juce::File& f, const SoundFont* sf, int numManuals, int pedalIndex, juce::String& error,
+                                 bool engraveMidi = true);
 
     // Re-engraves a MIDI-based piece, e.g. after parts were moved to other divisions.
     std::shared_ptr<Notation> engrave (const Score& score, const std::vector<bool>& partIsPedal, const std::vector<int>& partDivision,

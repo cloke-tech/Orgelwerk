@@ -48,7 +48,9 @@ void MusicDesk::setPiece (std::shared_ptr<Piece> p)
                 if (! noteBeat.count (id))
                     noteBeat[id] = e.qstamp;
     status = piece == nullptr ? juce::String (juce::String::fromUTF8 ("Noten hierher ziehen oder über „Öffnen“ laden"))
-                              : (piece->notation == nullptr ? juce::String (juce::String::fromUTF8 ("Kein Notenbild verfügbar")) : juce::String());
+                              : (piece->notation == nullptr ? (piece->notationFromScore ? juce::String ("Klicken, um die Noten zu setzen")
+                                                                                         : juce::String (juce::String::fromUTF8 ("Kein Notenbild verfügbar")))
+                                                            : juce::String());
     updateNav();
     repaint();
 }
@@ -76,10 +78,6 @@ MusicDesk::Page* MusicDesk::getPage (int index)
         walk (page.drawable.get());
     }
     auto& stored = pages[index] = std::move (page);
-    // re-apply highlights for notes on this page
-    for (auto& id : active)
-        if (stored.ids.count (id))
-            setHighlight (id, true);
     return &stored;
 }
 
@@ -141,8 +139,16 @@ void MusicDesk::paint (juce::Graphics& g)
         g.fillRect (slot);
         g.setColour (juce::Colours::grey);
         g.setFont (theme::serif (18.0f));
-        g.drawFittedText (proc.isLoading() ? juce::String (juce::String::fromUTF8 ("Noten werden gesetzt…")) : status, slot.reduced (30).toNearestInt(),
-                          juce::Justification::centred, 4);
+        const bool clickable = piece != nullptr && piece->notationFromScore && ! proc.isEngraving();
+        auto text = proc.isLoading() ? juce::String (juce::String::fromUTF8 ("Stück wird geladen…"))
+                                     : (proc.isEngraving() ? juce::String (juce::String::fromUTF8 ("Noten werden gesetzt…")) : status);
+        if (clickable)
+        {
+            g.setColour (theme::gold.withAlpha (isMouseOver() ? 0.25f : 0.12f));
+            g.fillRoundedRectangle (slot.reduced (24).withSizeKeepingCentre (slot.getWidth() - 48, 90), 8.0f);
+            g.setColour (juce::Colour (0xff5a3a10));
+        }
+        g.drawFittedText (text, slot.reduced (30).toNearestInt(), juce::Justification::centred, 4);
         return;
     }
     g.saveState();
@@ -159,7 +165,23 @@ void MusicDesk::paint (juce::Graphics& g)
         g.fillRect (slot);
         if (auto* page = getPage (index))
             if (page->drawable != nullptr)
-                page->drawable->drawWithin (g, slot, juce::RectanglePlacement::centred, 1.0f);
+            {
+                // the engraved page: rendered once per size, then only copied
+                const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
+                const int iw = juce::roundToInt (slot.getWidth() * scale), ih = juce::roundToInt (slot.getHeight() * scale);
+                if (! page->image.isValid() || page->image.getWidth() != iw || page->image.getHeight() != ih)
+                {
+                    page->image = juce::Image (juce::Image::RGB, juce::jmax (1, iw), juce::jmax (1, ih), false);
+                    juce::Graphics ig (page->image);
+                    ig.fillAll (juce::Colour (0xfffdfbf5));
+                    page->drawable->drawWithin (ig, page->image.getBounds().toFloat(), juce::RectanglePlacement::centred, 1.0f);
+                }
+                g.drawImage (page->image, slot);
+                // the notes sounding now, drawn on top in red
+                for (auto& id : active)
+                    if (auto it = page->ids.find (id); it != page->ids.end())
+                        drawHighlighted (g, *page, it->second, slot);
+            }
     }
     g.restoreState();
 }
@@ -240,22 +262,52 @@ static void highlight (juce::Drawable* d, bool on,
             highlight (cd, on, shapes, texts);
 }
 
-void MusicDesk::setHighlight (const juce::String& id, bool on)
+void MusicDesk::setHighlight (const juce::String& id, bool)
 {
-    for (auto& [index, page] : pages)
+    auto area = areaOfNote (id);
+    if (! area.isEmpty())
+        repaint (area);
+}
+
+// screen area of a note on a visible page (empty if it is not shown)
+juce::Rectangle<int> MusicDesk::areaOfNote (const juce::String& id)
+{
+    for (int s = 0; s < visiblePages(); ++s)
     {
-        auto it = page.ids.find (id);
-        if (it != page.ids.end())
-            highlight (it->second, on, page.shapeColours, page.textColours);
+        auto it = pages.find (firstPage + s);
+        if (it == pages.end() || it->second.drawable == nullptr)
+            continue;
+        auto n = it->second.ids.find (id);
+        if (n != it->second.ids.end())
+            return elementArea (it->second, n->second, pageSlot (s)).expanded (3.0f).getSmallestIntegerContainer();
     }
+    return {};
+}
+
+void MusicDesk::drawHighlighted (juce::Graphics& g, Page& page, juce::Drawable* d, juce::Rectangle<float> slot)
+{
+    auto* root = page.drawable.get();
+    // from the note's own coordinates up to the page, then onto the slot
+    juce::AffineTransform t;
+    for (juce::Component* c = d; c != nullptr && c != root; c = c->getParentComponent())
+        t = t.followedBy (juce::AffineTransform::translation ((float) c->getX(), (float) c->getY()).followedBy (c->getTransform()));
+    const auto fit = juce::RectanglePlacement (juce::RectanglePlacement::centred).getTransformToFit (root->getDrawableBounds(), slot);
+    t = t.followedBy (juce::AffineTransform::translation (root->getDrawableBounds().getTopLeft())).followedBy (fit);
+    const juce::Graphics::ScopedSaveState save (g);
+    g.addTransform (t);
+    highlight (d, true, page.shapeColours, page.textColours);
+    d->paintEntireComponent (g, false);
+    highlight (d, false, page.shapeColours, page.textColours);
 }
 
 void MusicDesk::update()
 {
     if (piece == nullptr || piece->notation == nullptr)
     {
-        if (proc.isLoading() != status.isEmpty())
+        const bool busy = proc.isLoading() || proc.isEngraving();
+        if (busy != wasBusy)
             repaint();
+        wasBusy = busy;
         return;
     }
     auto& tm = piece->notation->getTimemap();
@@ -298,6 +350,7 @@ void MusicDesk::update()
         }
     active = std::move (now);
 
+    changed = false; // note areas were repainted individually by setHighlight
     if (follow && newest.isNotEmpty())
     {
         const int page = piece->notation->pageOfElement (newest);
@@ -334,6 +387,16 @@ juce::Rectangle<float> MusicDesk::elementArea (Page& page, juce::Drawable* d, ju
     return root->getLocalArea (d, d->getLocalBounds()).toFloat().translated (origin.x, origin.y).transformedBy (fit);
 }
 
+std::unique_ptr<juce::AccessibilityHandler> MusicDesk::createAccessibilityHandler()
+{
+    setTitle ("Notenpult");
+    return std::make_unique<juce::AccessibilityHandler> (*this, juce::AccessibilityRole::button,
+        juce::AccessibilityActions().addAction (juce::AccessibilityActionType::press, [this] {
+            if (piece != nullptr && piece->notation == nullptr && piece->notationFromScore)
+                proc.requestEngraving();
+        }));
+}
+
 void MusicDesk::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
 {
     if (std::abs (w.deltaY) < 0.01f)
@@ -358,6 +421,13 @@ void MusicDesk::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelD
 
 void MusicDesk::mouseDown (const juce::MouseEvent& e)
 {
+    // a MIDI file shows its pages only once asked for
+    if (piece != nullptr && piece->notation == nullptr && piece->notationFromScore)
+    {
+        proc.requestEngraving();
+        repaint();
+        return;
+    }
     // click on a note: continue playback from there
     if (piece == nullptr || piece->notation == nullptr || piece->score == nullptr)
         return;

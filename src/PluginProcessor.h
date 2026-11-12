@@ -97,6 +97,9 @@ public:
     // --- score ------------------------------------------------------------------
     void loadFileAsync (const juce::File& f);
     bool isLoading() const { return loading.load(); }
+    // pages of a MIDI file are set on request (click on the music desk)
+    void requestEngraving();
+    bool isEngraving() const { return engraving.load(); }
     juce::String takeLoadMessage();
     std::shared_ptr<Piece> getPiece() const;
     const std::vector<int>& getPartDivision() const { return partDivision; }
@@ -141,7 +144,7 @@ public:
 private:
     void timerCallback() override;
     void setPiece (std::shared_ptr<Piece> p);
-    void reengrave();
+    void reengrave (bool evenIfNotShown = false);
 
     bool standalone = false;
     MidiInputRouter router;
@@ -165,7 +168,7 @@ private:
         juce::String device, deviceName;
     } learnResult;
 
-    std::atomic<bool> loading { false };
+    std::atomic<bool> loading { false }, engraving { false };
     juce::String loadMessage;
     juce::CriticalSection messageLock;
     std::unique_ptr<juce::Thread> loaderThread;
@@ -181,6 +184,7 @@ private:
     std::shared_ptr<int> alive = std::make_shared<int> (0); // async callbacks check this
     juce::StringArray restorePartMap;
     bool restoreApply = true, restorePending = false;
+    bool openedFromCommandLine = false; // a file given at start wins over the last session's piece
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OrgelProcessor)
 };

@@ -198,6 +198,7 @@ namespace ScoreIO
 
         auto score = std::make_shared<Score>();
         std::map<std::pair<int, int>, Stream> streams;
+        bool usesBankSelect = false;
         juce::StringArray trackNames;
 
         for (int t = 0; t < midi.getNumTracks(); ++t)
@@ -238,6 +239,8 @@ namespace ScoreIO
 
                 if (m.isController())
                 {
+                    if (m.getControllerNumber() == 0 || m.getControllerNumber() == 32)
+                        usesBankSelect = true;
                     if (m.getControllerNumber() == 0)
                         bankMsb[ch] = m.getControllerValue();
                     else if (m.getControllerNumber() == 32)
@@ -478,6 +481,18 @@ namespace ScoreIO
             }
         }
 
+        // Program numbers only mean organ stops in files made for an organ SoundFont (they
+        // select banks). In ordinary General-MIDI files they are instruments (flute, strings,
+        // drums ...): play those with the organ's current registration instead.
+        if (! usesBankSelect)
+        {
+            for (auto& p : score->parts)
+            {
+                p.registration.clear();
+                p.pedalStops = false;
+            }
+            score->registrationChanges.clear();
+        }
         score->finalise();
         estimateKeyIfMissing (*score);
         // drop duplicate meta events that multi-track files repeat in every track
@@ -490,11 +505,73 @@ namespace ScoreIO
         return score;
     }
 
+    // Many MIDI files in the wild are slightly off: bytes after the last track, a format-0
+    // header with several tracks, a RIFF (.rmi) wrapper, a track that claims to be longer than
+    // the file. Rebuild a clean file from the tracks that are there.
+    static juce::MemoryBlock repairMidi (const void* data, size_t size)
+    {
+        auto* b = static_cast<const uint8_t*> (data);
+        auto be32 = [b] (size_t p) { return (uint32_t) b[p] << 24 | (uint32_t) b[p + 1] << 16 | (uint32_t) b[p + 2] << 8 | b[p + 3]; };
+        size_t head = 0;
+        while (head + 14 <= size && std::memcmp (b + head, "MThd", 4) != 0)
+            ++head;
+        if (head + 14 > size)
+            return {};
+        const size_t headerLen = juce::jmax<uint32_t> (6, be32 (head + 4));
+        const uint16_t division = (uint16_t) (b[head + 12] << 8 | b[head + 13]);
+        std::vector<std::pair<size_t, size_t>> tracks; // (start of data, length)
+        size_t p = head + 8 + headerLen;
+        while (p + 8 <= size)
+        {
+            if (std::memcmp (b + p, "MTrk", 4) != 0)
+            {
+                ++p; // skip junk until the next track
+                continue;
+            }
+            const size_t len = juce::jmin<size_t> (be32 (p + 4), size - (p + 8));
+            tracks.push_back ({ p + 8, len });
+            p += 8 + len;
+        }
+        if (tracks.empty())
+            return {};
+        juce::MemoryOutputStream out;
+        out.write ("MThd", 4);
+        out.writeIntBigEndian (6);
+        out.writeShortBigEndian ((short) (tracks.size() > 1 ? 1 : 0));
+        out.writeShortBigEndian ((short) tracks.size());
+        out.writeShortBigEndian ((short) division);
+        for (auto [start, len] : tracks)
+        {
+            out.write ("MTrk", 4);
+            // make sure every track ends with an end-of-track event
+            const bool hasEnd = len >= 3 && b[start + len - 3] == 0xff && b[start + len - 2] == 0x2f && b[start + len - 1] == 0x00;
+            out.writeIntBigEndian ((int) (len + (hasEnd ? 0 : 4)));
+            out.write (b + start, len);
+            if (! hasEnd)
+            {
+                const uint8_t eot[] = { 0x00, 0xff, 0x2f, 0x00 };
+                out.write (eot, 4);
+            }
+        }
+        return out.getMemoryBlock();
+    }
+
     std::shared_ptr<Score> fromMidiData (const void* data, size_t size, const SoundFont* sf, juce::String& error)
     {
-        juce::MemoryInputStream in (data, size, false);
         juce::MidiFile mf;
-        if (! mf.readFrom (in, true))
+        bool ok = false;
+        {
+            juce::MemoryInputStream in (data, size, false);
+            ok = mf.readFrom (in, true);
+        }
+        if (! ok)
+        {
+            auto repaired = repairMidi (data, size);
+            juce::MemoryInputStream in (repaired, false);
+            mf.clear();
+            ok = repaired.getSize() > 0 && mf.readFrom (in, true);
+        }
+        if (! ok)
         {
             error = juce::String::fromUTF8 ("Die MIDI-Daten sind ungültig.");
             return {};

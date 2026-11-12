@@ -122,6 +122,7 @@ OrgelProcessor::OrgelProcessor()
                 juce::File f (arg.unquoted());
                 if (f.existsAsFile())
                 {
+                    openedFromCommandLine = true;
                     juce::MessageManager::callAsync ([this, f, token = std::weak_ptr<int> (alive)] {
                         if (! token.expired())
                             loadFileAsync (f);
@@ -331,7 +332,7 @@ void OrgelProcessor::loadFileAsync (const juce::File& f)
     std::weak_ptr<int> token = alive;
     pool.addJob ([this, f, sf, manuals, ped, token] {
         juce::String error;
-        std::shared_ptr<Piece> p (Formats::load (f, sf.get(), manuals, ped, error).release());
+        std::shared_ptr<Piece> p (Formats::load (f, sf.get(), manuals, ped, error, false).release());
         juce::MessageManager::callAsync ([this, p, error, token] {
             if (token.expired())
                 return;
@@ -449,25 +450,47 @@ std::vector<bool> OrgelProcessor::partIsPedal() const
     return r;
 }
 
-void OrgelProcessor::reengrave()
+void OrgelProcessor::requestEngraving()
+{
+    reengrave (true);
+}
+
+void OrgelProcessor::reengrave (bool evenIfNotShown)
 {
     auto p = getPiece();
     if (p == nullptr || ! p->notationFromScore)
         return;
+    // pages that were never asked for are not set (that is what the click on the desk is for)
+    if (p->notation == nullptr && ! evenIfNotShown)
+        return;
+    if (engraving.exchange (true) && evenIfNotShown)
+        return;
+    sendChangeMessage();
     auto pedal = partIsPedal();
     auto map = partDivision;
     std::weak_ptr<int> token = alive;
     pool.addJob ([this, p, pedal, map, token] {
         juce::String error;
         auto n = Formats::engrave (*p->score, pedal, map, error);
-        if (n == nullptr)
-            return;
-        juce::MessageManager::callAsync ([this, p, n, token] {
+        juce::MessageManager::callAsync ([this, p, n, error, token] {
             if (token.expired())
                 return;
+            engraving = false;
+            if (n == nullptr)
+            {
+                {
+                    const juce::ScopedLock sl (messageLock);
+                    loadMessage = "Notenbild konnte nicht erzeugt werden: " + error;
+                }
+                sendChangeMessage();
+                return;
+            }
             const juce::ScopedLock sl (pieceLock);
             if (piece != p)
+            {
+                sendChangeMessage();
                 return;
+            }
             auto copy = std::make_shared<Piece> (*p);
             copy->notation = n;
             piece = copy;
@@ -674,6 +697,7 @@ void OrgelProcessor::setStateInformation (const void* data, int sizeInBytes)
     for (int i = 0; i < numCombinations; ++i)
         combinations[i] = xml->getStringAttribute ("combination" + juce::String (i));
 
+    if (! openedFromCommandLine)
     {
         const juce::ScopedLock sl (pieceLock);
         marks.clear();
@@ -683,7 +707,7 @@ void OrgelProcessor::setStateInformation (const void* data, int sizeInBytes)
     }
     // reload the piece but keep the registration and part mapping the user saved
     juce::File f (xml->getStringAttribute ("file"));
-    if (f.existsAsFile())
+    if (f.existsAsFile() && ! openedFromCommandLine)
     {
         restoreApply = applyFileRegistration;
         restorePartMap = juce::StringArray::fromTokens (xml->getStringAttribute ("partDivision"), ",", "");

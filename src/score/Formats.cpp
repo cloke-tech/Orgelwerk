@@ -115,7 +115,8 @@ std::shared_ptr<Notation> engrave (const Score& score, const std::vector<bool>& 
     return n;
 }
 
-std::unique_ptr<Piece> load (const juce::File& f, const SoundFont* sf, int numManuals, int pedalIndex, juce::String& error)
+std::unique_ptr<Piece> load (const juce::File& f, const SoundFont* sf, int numManuals, int pedalIndex, juce::String& error,
+                             bool engraveMidi)
 {
     auto piece = std::make_unique<Piece>();
     piece->source = f;
@@ -129,9 +130,11 @@ std::unique_ptr<Piece> load (const juce::File& f, const SoundFont* sf, int numMa
         std::vector<bool> isPedal;
         for (int d : map)
             isPedal.push_back (d >= 0 && d == pedalIndex);
+        piece->notationFromScore = true;
+        if (! engraveMidi)
+            return piece;
         juce::String engraveError;
         piece->notation = engrave (*piece->score, isPedal, map, engraveError);
-        piece->notationFromScore = true;
         if (piece->notation == nullptr)
             piece->warning = "Notenbild konnte nicht erzeugt werden: " + engraveError;
         return piece;
@@ -387,6 +390,13 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
     }
     auto& score = *ctx.piece->score;
     auto notation = ctx.piece->notation;
+    // pages not set yet (MIDI file, not looked at): set them now for formats that need them
+    if (notation == nullptr && ctx.piece->notationFromScore
+        && (fmt.id == "mei" || fmt.id == "svg" || fmt.id == "png" || fmt.id == "pdf"))
+    {
+        juce::String engraveError;
+        notation = engrave (score, ctx.partIsPedal, ctx.partDivision, engraveError);
+    }
     auto writeText = [&] (const juce::String& text) {
         if (text.isEmpty())
         {

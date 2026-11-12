@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <map>
 #include "../engine/OrganModel.h"
 
 namespace orgel::theme
@@ -51,24 +52,38 @@ inline void drawPlate (juce::Graphics& g, juce::Rectangle<float> r, const juce::
     g.drawFittedText (label, r.toNearestInt().reduced (4, 0), juce::Justification::centred, 1);
 }
 
+// Wood with grain. The grain is drawn once per size and colour and then reused as an image:
+// painting hundreds of lines on every frame made the animations stutter.
 inline void fillWood (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour base, bool vertical = false)
 {
-    juce::ColourGradient grad (base.brighter (0.12f), r.getX(), r.getY(), base.darker (0.25f),
-                               vertical ? r.getRight() : r.getX(), vertical ? r.getY() : r.getBottom(), false);
-    g.setGradientFill (grad);
-    g.fillRect (r);
-    // grain
-    juce::Random rnd (12345 + (int) r.getX() * 7 + (int) r.getY());
-    for (int i = 0; i < (int) (r.getWidth() * r.getHeight() / 900.0f) && i < 400; ++i)
+    if (r.isEmpty())
+        return;
+    const int w = juce::roundToInt (r.getWidth()), h = juce::roundToInt (r.getHeight());
+    static std::map<juce::String, juce::Image> cache;
+    const auto key = juce::String (w) + "x" + juce::String (h) + base.toString() + (vertical ? "v" : "h");
+    auto it = cache.find (key);
+    if (it == cache.end())
     {
-        const float y = r.getY() + rnd.nextFloat() * r.getHeight();
-        const float x = r.getX() + rnd.nextFloat() * r.getWidth();
-        const float len = 20.0f + rnd.nextFloat() * 80.0f;
-        g.setColour (juce::Colours::black.withAlpha (0.05f + 0.06f * rnd.nextFloat()));
-        if (vertical)
-            g.drawLine (x, y, x + rnd.nextFloat() * 2.0f - 1.0f, juce::jmin (r.getBottom(), y + len), 1.0f);
-        else
-            g.drawLine (x, y, juce::jmin (r.getRight(), x + len), y + rnd.nextFloat() * 2.0f - 1.0f, 1.0f);
+        if (cache.size() > 48)
+            cache.clear();
+        juce::Image img (juce::Image::RGB, juce::jmax (1, w), juce::jmax (1, h), false);
+        juce::Graphics ig (img);
+        juce::ColourGradient grad (base.brighter (0.12f), 0, 0, base.darker (0.25f), vertical ? (float) w : 0.0f, vertical ? 0.0f : (float) h, false);
+        ig.setGradientFill (grad);
+        ig.fillAll();
+        juce::Random rnd (12345 + w * 7 + h);
+        for (int i = 0; i < (int) ((float) w * (float) h / 900.0f) && i < 400; ++i)
+        {
+            const float y = rnd.nextFloat() * (float) h, x = rnd.nextFloat() * (float) w;
+            const float len = 20.0f + rnd.nextFloat() * 80.0f;
+            ig.setColour (juce::Colours::black.withAlpha (0.05f + 0.06f * rnd.nextFloat()));
+            if (vertical)
+                ig.drawLine (x, y, x + rnd.nextFloat() * 2.0f - 1.0f, juce::jmin ((float) h, y + len), 1.0f);
+            else
+                ig.drawLine (x, y, juce::jmin ((float) w, x + len), y + rnd.nextFloat() * 2.0f - 1.0f, 1.0f);
+        }
+        it = cache.emplace (key, img).first;
     }
+    g.drawImageAt (it->second, juce::roundToInt (r.getX()), juce::roundToInt (r.getY()));
 }
 } // namespace orgel::theme

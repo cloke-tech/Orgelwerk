@@ -426,7 +426,8 @@ void OrgelEditor::drawPipe (juce::Graphics& g, const FacadePipe& p, juce::Point<
         stretch = (float) (std::exp (-dt / 150.0) * std::cos (dt / 48.0));
     // stays tall while it sounds (level), jumps and wobbles when it starts (stretch)
     const float sy = 1.0f + 0.16f * p.level + 0.24f * stretch;
-    const float sx = 1.0f + 0.06f * p.level - 0.14f * stretch;
+    // never narrower than at rest, so the pipe always covers its own resting outline
+    const float sx = 1.0f + 0.06f * p.level + 0.08f * std::abs (stretch);
 
     const float baseY = p.baseY + offset.y;
     const float x = p.body.getCentreX() + offset.x;
@@ -486,10 +487,7 @@ void OrgelEditor::paintFacadeGlow (juce::Graphics& g)
     g.reduceClipRegion (facadeArea.withTrimmedTop (8));
     const double now = juce::Time::getMillisecondCounterHiRes();
     const auto offset = facadeArea.getPosition().toFloat();
-    // quiet pipes first, singing pipes on top so their glow overlaps the neighbours
-    for (auto& p : pipes)
-        if (p.level <= 0.0f && now - p.popStart >= 700.0)
-            drawPipe (g, p, offset, now);
+    // resting pipes come from the cached picture; draw only the ones that move or sound
     for (auto& p : pipes)
         if (p.level > 0.0f || now - p.popStart < 700.0)
             drawPipe (g, p, offset, now);
@@ -512,6 +510,13 @@ void OrgelEditor::paint (juce::Graphics& g)
             facadeCache = juce::Image (juce::Image::RGB, facadeArea.getWidth(), facadeArea.getHeight(), true);
             juce::Graphics fg (facadeCache);
             drawFacade (fg, facadeCache.getBounds().toFloat());
+            // resting pipes belong to the cached picture; only sounding ones are drawn live
+            for (auto p : pipes)
+            {
+                p.level = 0.0f;
+                p.popStart = -1.0e9;
+                drawPipe (fg, p, {}, 0.0);
+            }
         }
         g.drawImageAt (facadeCache, facadeArea.getX(), facadeArea.getY());
         paintFacadeGlow (g);
