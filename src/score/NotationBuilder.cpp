@@ -2,6 +2,7 @@
 #include <map>
 #include <set>
 #include <tuple>
+#include <array>
 #include "../engine/OrganModel.h"
 
 namespace orgel::NotationBuilder
@@ -16,6 +17,7 @@ namespace
         int showAccidental = -99; // -99 = none, otherwise the alter to print
         bool tieStart = false, tieStop = false;
         int division = -1;        // organ division (manual) that plays it
+        int ornament = 0;         // 0 none, 1 trill, 2 mordent (lower), 3 inverted mordent (upper)
     };
 
     struct QEvent
@@ -197,6 +199,103 @@ namespace
         return out;
     }
 
+    // ---- ornaments ---------------------------------------------------------------
+    // Trills and mordents that a performer (or a sequencer file) played out as fast notes are
+    // written the way they are printed: one note with "tr" or a mordent sign.
+    //  - trill: at least four fast notes swinging between two neighbouring pitches; the
+    //    written note is the lower one and lasts as long as the whole trill
+    //  - mordent: main note, its neighbour, main note again - the first two fast, the last
+    //    one held
+    // "fast" means a 32nd or quicker. The notes that are absorbed are not written.
+    void detectOrnaments (const Score& score, std::vector<bool>& written, std::vector<double>& start,
+                          std::vector<double>& end, std::vector<int>& ornamentOf)
+    {
+        // a trill moves in 32nds or faster; a mordent may be a little slower (16th triplets)
+        constexpr double fast = 0.18, trillFast = 0.15, joinGap = 0.06;
+        std::map<int, std::vector<int>> byPart;
+        for (int i = 0; i < (int) score.notes.size(); ++i)
+            if (written[(size_t) i])
+                byPart[score.notes[(size_t) i].part].push_back (i);
+        auto len = [&] (int i) { return end[(size_t) i] - start[(size_t) i]; };
+        auto key = [&] (int i) { return score.notes[(size_t) i].key; };
+        for (auto& [part, idx] : byPart)
+        {
+            std::sort (idx.begin(), idx.end(), [&] (int a, int b) { return start[(size_t) a] < start[(size_t) b]; });
+            std::vector<bool> used (idx.size(), false);
+            // the note that follows idx[k] directly with a neighbouring pitch (wanted: that key, or any if 0)
+            auto follower = [&] (size_t k, int wanted) -> int {
+                const int i = idx[k];
+                for (size_t m = k + 1; m < idx.size() && start[(size_t) idx[m]] <= end[(size_t) i] + joinGap; ++m)
+                {
+                    const int j = idx[m];
+                    if (used[m] || start[(size_t) j] < end[(size_t) i] - joinGap || start[(size_t) j] <= start[(size_t) i])
+                        continue;
+                    const int d = std::abs (key (j) - key (i));
+                    if ((wanted == 0 && (d == 1 || d == 2)) || key (j) == wanted)
+                        return (int) m;
+                }
+                return -1;
+            };
+            for (size_t k = 0; k < idx.size(); ++k)
+            {
+                if (used[k] || len (idx[k]) > fast)
+                    continue;
+                std::vector<size_t> chain { k };
+                int other = 0;
+                while (true)
+                {
+                    const size_t last = chain.back();
+                    if (len (idx[last]) > fast)
+                        break; // a held note ends the figure
+                    const int want = chain.size() >= 2 ? key (idx[chain[chain.size() - 2]]) : other;
+                    const int m = follower (last, want);
+                    if (m < 0)
+                        break;
+                    chain.push_back ((size_t) m);
+                }
+                const int a = key (idx[k]);
+                bool trillSpeed = true;
+                for (size_t c = 0; c + 1 < chain.size(); ++c)
+                    trillSpeed &= len (idx[chain[c]]) <= trillFast;
+                if (chain.size() >= 4 && trillSpeed)
+                {
+                    const int b = key (idx[chain[1]]);
+                    const int mainKey = juce::jmin (a, b);
+                    size_t mainPos = chain[0];
+                    for (size_t c : chain)
+                        if (key (idx[c]) == mainKey)
+                        {
+                            mainPos = c;
+                            break;
+                        }
+                    const int mainNote = idx[mainPos];
+                    const double s0 = start[(size_t) idx[chain.front()]], e0 = end[(size_t) idx[chain.back()]];
+                    for (size_t c : chain)
+                    {
+                        used[c] = true;
+                        if (c != mainPos)
+                            written[(size_t) idx[c]] = false;
+                    }
+                    start[(size_t) mainNote] = s0;
+                    end[(size_t) mainNote] = e0;
+                    ornamentOf[(size_t) mainNote] = 1;
+                    continue;
+                }
+                if (chain.size() >= 3 && (chain.size() == 3 || len (idx[chain[2]]) > fast || ! trillSpeed) && key (idx[chain[2]]) == a && len (idx[chain[1]]) <= fast
+                    && len (idx[chain[2]]) > 2.0 * len (idx[k]))
+                {
+                    const int mainNote = idx[chain[2]];
+                    const double s0 = start[(size_t) idx[k]];
+                    written[(size_t) idx[k]] = false;
+                    written[(size_t) idx[chain[1]]] = false;
+                    used[k] = used[chain[1]] = used[chain[2]] = true;
+                    start[(size_t) mainNote] = s0;
+                    ornamentOf[(size_t) mainNote] = key (idx[chain[1]]) < a ? 2 : 3;
+                }
+            }
+        }
+    }
+
     // ---- building --------------------------------------------------------------
     struct Chord
     {
@@ -231,6 +330,7 @@ namespace
         //    is let go a bit early or late still ends on the beat.
         std::vector<double> start (score.notes.size()), end (score.notes.size());
         std::vector<int> qStart (score.notes.size(), 0), qEnd (score.notes.size(), 0);
+        std::vector<int> ornamentOf (score.notes.size(), 0);
         TripletBeats triplets;
         {
             std::vector<int> order;
@@ -238,9 +338,11 @@ namespace
             {
                 start[(size_t) i] = score.notes[(size_t) i].start;
                 end[(size_t) i] = score.notes[(size_t) i].start + score.notes[(size_t) i].length;
+            }
+            detectOrnaments (score, written, start, end, ornamentOf);
+            for (int i = 0; i < (int) score.notes.size(); ++i)
                 if (written[(size_t) i])
                     order.push_back (i);
-            }
             std::sort (order.begin(), order.end(), [&] (int a, int b) { return start[(size_t) a] < start[(size_t) b]; });
             auto offGrid = [] (double t, double perBeat) { return std::abs (t * perBeat - std::round (t * perBeat)) / perBeat; };
             for (size_t i = 0; i < order.size();)
@@ -569,100 +671,296 @@ namespace
                 }
             }
 
+            std::map<std::pair<int, int>, int> ornamentAt; // (start, key) -> ornament
+            for (auto [idx, key] : staffNotes[(size_t) s])
+                if (ornamentOf[(size_t) idx] != 0)
+                    ornamentAt[{ qStart[(size_t) idx], key }] = ornamentOf[(size_t) idx];
             std::map<std::pair<int, int>, int> divisionOf; // (start, key) -> division
             for (auto& n : qn)
                 divisionOf[{ n.qs, n.key }] = n.part < (int) opt.partDivision.size() ? opt.partDivision[(size_t) n.part] : -1;
-            std::map<std::pair<int, int>, std::vector<int>> chordMap;
-            for (auto& n : qn)
-            {
-                const int qs = n.qs, qe = n.qe, key = n.key;
-                auto& keys = chordMap[{ qs, qe }];
-                if (std::find (keys.begin(), keys.end(), key) == keys.end())
-                    keys.push_back (key);
-            }
-            std::vector<Chord> chords;
-            for (auto& [range, keys] : chordMap)
-            {
-                Chord c { range.first, range.second, keys };
-                std::sort (c.keys.begin(), c.keys.end());
-                chords.push_back (c);
-            }
-            std::stable_sort (chords.begin(), chords.end(), [] (const Chord& a, const Chord& b) {
-                if (a.qs != b.qs) return a.qs < b.qs;
-                return a.keys.back() > b.keys.back();
-            });
-
-            // voices: give each chord to a free voice, preferring the one that continues nearby pitches
+            // Voices, the way a copyist writes them:
+            // 1. Lines: every note continues the free line nearest in pitch (a melody, the alto,
+            //    one note of held chords...). Lines know nothing about rhythm yet.
+            // 2. Per bar the lines are split into an upper voice (stems up) and a lower voice
+            //    (stems down), or kept in one voice when they all move in the same rhythm.
+            //    The split chosen is the one where the lines put together clash least.
+            // 3. Inside a voice, notes with the same start and end are chords. A note that the
+            //    voice cannot hold (another line moves under it) goes to a third voice when it
+            //    is long, or is written shorter when it only overlaps a little.
             struct VoiceState
             {
-                int lastEnd = 0, lastPitch = -1, lastStart = -1;
+                int lastEnd = 0;
                 std::vector<Chord> chords;
                 double pitchSum = 0;
                 int pitchCount = 0;
             };
-            std::vector<VoiceState> vs;
-            for (auto& c : chords)
+            enum { upperSlot = 0, lowerSlot = 1, upperExtra = 2, lowerExtra = 3, numSlots = 4 };
+            std::vector<int> lineOf (qn.size(), -1);
             {
-                const int top = c.keys.back();
-                int bestV = -1;
-                int bestDist = 1 << 30;
-                for (int v = 0; v < (int) vs.size(); ++v)
-                    if (vs[(size_t) v].lastEnd <= c.qs)
+                std::vector<int> order (qn.size());
+                for (size_t i = 0; i < qn.size(); ++i)
+                    order[i] = (int) i;
+                std::sort (order.begin(), order.end(), [&] (int a2, int b2) {
+                    if (qn[(size_t) a2].qs != qn[(size_t) b2].qs) return qn[(size_t) a2].qs < qn[(size_t) b2].qs;
+                    return qn[(size_t) a2].key > qn[(size_t) b2].key;
+                });
+                struct LineState { int lastEnd, lastKey; };
+                std::vector<LineState> lines;
+                for (int i : order)
+                {
+                    auto& n = qn[(size_t) i];
+                    int best = -1;
+                    double bestCost = 1.0e9;
+                    for (int l = 0; l < (int) lines.size(); ++l)
+                        if (lines[(size_t) l].lastEnd <= n.qs)
+                        {
+                            const double idle = (n.qs - lines[(size_t) l].lastEnd) / (double) (4 * U);
+                            const double cost = std::abs (lines[(size_t) l].lastKey - n.key) + 2.0 * juce::jmin (idle, 4.0);
+                            if (cost < bestCost)
+                            {
+                                bestCost = cost;
+                                best = l;
+                            }
+                        }
+                    if (best < 0 || bestCost > 14.0)
                     {
-                        const int dist = vs[(size_t) v].lastPitch < 0 ? 0 : std::abs (vs[(size_t) v].lastPitch - top);
-                        if (dist < bestDist)
-                        {
-                            bestDist = dist;
-                            bestV = v;
-                        }
+                        lines.push_back ({ 0, n.key });
+                        best = (int) lines.size() - 1;
                     }
-                if (bestV < 0 && vs.size() < 4)
-                {
-                    vs.push_back ({});
-                    bestV = (int) vs.size() - 1;
-                }
-                if (bestV < 0)
-                {
-                    // no free voice: join a chord that starts together, else start after the earliest voice ends
-                    for (int v = 0; v < (int) vs.size() && bestV < 0; ++v)
-                        if (vs[(size_t) v].lastStart == c.qs)
-                        {
-                            auto& last = vs[(size_t) v].chords.back();
-                            for (int k : c.keys)
-                                if (std::find (last.keys.begin(), last.keys.end(), k) == last.keys.end())
-                                    last.keys.push_back (k);
-                            std::sort (last.keys.begin(), last.keys.end());
-                            bestV = -2;
-                        }
-                    if (bestV == -2)
-                        continue;
-                    int earliest = 0;
-                    for (int v = 1; v < (int) vs.size(); ++v)
-                        if (vs[(size_t) v].lastEnd < vs[(size_t) earliest].lastEnd)
-                            earliest = v;
-                    if (vs[(size_t) earliest].lastEnd >= c.qe)
-                        continue;
-                    c.qs = vs[(size_t) earliest].lastEnd;
-                    bestV = earliest;
-                }
-                auto& v = vs[(size_t) bestV];
-                v.chords.push_back (c);
-                v.lastEnd = c.qe;
-                v.lastStart = c.qs;
-                v.lastPitch = top;
-                for (int k : c.keys)
-                {
-                    v.pitchSum += k;
-                    v.pitchCount++;
+                    lines[(size_t) best] = { n.qe, n.key };
+                    lineOf[(size_t) i] = best;
                 }
             }
-            std::stable_sort (vs.begin(), vs.end(), [] (const VoiceState& a, const VoiceState& b) {
-                const double ma = a.pitchCount ? a.pitchSum / a.pitchCount : 0;
-                const double mb = b.pitchCount ? b.pitchSum / b.pitchCount : 0;
-                return ma > mb;
-            });
-            if (vs.empty())
-                vs.push_back ({});
+            // how much the notes put into one voice would clash: overlapping notes that are
+            // not one chord
+            auto clash = [&] (const std::vector<int>& idx) {
+                double c = 0;
+                for (size_t x = 0; x < idx.size(); ++x)
+                    for (size_t y = x + 1; y < idx.size(); ++y)
+                    {
+                        auto& a2 = qn[(size_t) idx[x]];
+                        auto& b2 = qn[(size_t) idx[y]];
+                        if (a2.qs == b2.qs && a2.qe == b2.qe)
+                            continue;
+                        const int ov = juce::jmin (a2.qe, b2.qe) - juce::jmax (a2.qs, b2.qs);
+                        if (ov > 0)
+                            c += ov + U / 4; // every clash costs something, long ones more
+                    }
+                return c;
+            };
+            std::vector<int> slotOf (qn.size(), upperSlot);
+            {
+                std::vector<std::vector<int>> byMeasure (q.measures.size());
+                for (size_t i = 0; i < qn.size(); ++i)
+                {
+                    int lo = 0, hi = (int) q.measures.size() - 1;
+                    while (lo < hi)
+                    {
+                        const int mid = (lo + hi + 1) / 2;
+                        if (q.measures[(size_t) mid].start <= qn[i].qs) lo = mid; else hi = mid - 1;
+                    }
+                    byMeasure[(size_t) lo].push_back ((int) i);
+                }
+                std::vector<int> carried; // notes from earlier bars still sounding
+                for (size_t mi = 0; mi < q.measures.size(); ++mi)
+                {
+                    const int ms = q.measures[mi].start;
+                    carried.erase (std::remove_if (carried.begin(), carried.end(), [&] (int i) { return qn[(size_t) i].qe <= ms; }), carried.end());
+                    auto& here = byMeasure[mi];
+                    if (here.empty())
+                        continue;
+                    std::map<int, std::vector<int>> lineNotes;
+                    for (int i : here)
+                        lineNotes[lineOf[(size_t) i]].push_back (i);
+                    std::vector<std::pair<double, int>> ranked; // (mean pitch, line)
+                    for (auto& [l, idx] : lineNotes)
+                    {
+                        double sum = 0;
+                        for (int i : idx)
+                            sum += qn[(size_t) i].key;
+                        ranked.push_back ({ sum / (double) idx.size(), l });
+                    }
+                    std::sort (ranked.begin(), ranked.end(), [] (auto& x, auto& y) { return x.first > y.first; });
+                    const int L = (int) ranked.size();
+                    int bestK = L;
+                    double bestCost = 1.0e18;
+                    for (int k = L; k >= 1; --k) // k lines in the upper voice, k == L: one voice
+                    {
+                        std::vector<int> up, low;
+                        for (int r = 0; r < L; ++r)
+                            for (int i : lineNotes[ranked[(size_t) r].second])
+                                (r < k ? up : low).push_back (i);
+                        for (int i : carried)
+                            (slotOf[(size_t) i] % 2 == 0 ? up : low).push_back (i);
+                        double cost = clash (up) + clash (low) + (k < L ? U / 2 : 0);
+                        // the lower voice should stay below the upper one
+                        if (k < L)
+                            cost += juce::jmax (0.0, ranked[(size_t) k].first - ranked[(size_t) k - 1].first) * U;
+                        if (cost < bestCost - 1.0e-9)
+                        {
+                            bestCost = cost;
+                            bestK = k;
+                        }
+                    }
+                    for (int r = 0; r < L; ++r)
+                        for (int i : lineNotes[ranked[(size_t) r].second])
+                            slotOf[(size_t) i] = r < bestK ? upperSlot : lowerSlot;
+                    for (int i : here)
+                        if (qn[(size_t) i].qe > ms + q.measures[mi].length)
+                            carried.push_back (i);
+                }
+            }
+            // chords per slot, then each slot made playable as one rhythm
+            std::vector<VoiceState> vs (numSlots);
+            {
+                std::array<std::map<std::pair<int, int>, std::vector<int>>, numSlots> chordMaps;
+                for (size_t i = 0; i < qn.size(); ++i)
+                {
+                    auto& keys = chordMaps[(size_t) slotOf[i]][{ qn[i].qs, qn[i].qe }];
+                    if (std::find (keys.begin(), keys.end(), qn[i].key) == keys.end())
+                        keys.push_back (qn[i].key);
+                }
+                auto place = [&] (int slot, Chord c) {
+                    auto& v = vs[(size_t) slot];
+                    v.chords.push_back (c);
+                    v.lastEnd = juce::jmax (v.lastEnd, c.qe);
+                };
+                for (int slot : { upperSlot, lowerSlot })
+                {
+                    const int extra = slot + 2;
+                    std::vector<Chord> cs;
+                    for (auto& [range, keys] : chordMaps[(size_t) slot])
+                    {
+                        Chord c { range.first, range.second, keys };
+                        std::sort (c.keys.begin(), c.keys.end());
+                        cs.push_back (c);
+                    }
+                    // in start order; at the same start the longer chord first
+                    std::stable_sort (cs.begin(), cs.end(), [] (const Chord& x, const Chord& y) {
+                        return x.qs != y.qs ? x.qs < y.qs : x.qe > y.qe;
+                    });
+                    for (auto& c : cs)
+                    {
+                        auto& v = vs[(size_t) slot];
+                        if (v.chords.empty() || v.chords.back().qe <= c.qs)
+                        {
+                            place (slot, c);
+                            continue;
+                        }
+                        auto& prev = v.chords.back();
+                        if (prev.qs == c.qs)
+                        {
+                            // struck together, let go at different times
+                            if (prev.qe - c.qe <= juce::jmax (U / 4, (c.qe - c.qs) / 3))
+                            {
+                                for (int k : c.keys)
+                                    if (std::find (prev.keys.begin(), prev.keys.end(), k) == prev.keys.end())
+                                        prev.keys.push_back (k);
+                                std::sort (prev.keys.begin(), prev.keys.end());
+                                continue;
+                            }
+                            // the longer one is held in an extra voice when that is free
+                            if (vs[(size_t) extra].lastEnd <= prev.qs)
+                            {
+                                Chord held = prev;
+                                v.chords.pop_back();
+                                place (extra, held);
+                                v.lastEnd = v.chords.empty() ? 0 : v.chords.back().qe;
+                                place (slot, c);
+                                continue;
+                            }
+                            // else the shorter rhythm wins: the held notes are written shorter
+                            for (int k : c.keys)
+                                if (std::find (prev.keys.begin(), prev.keys.end(), k) == prev.keys.end())
+                                    prev.keys.push_back (k);
+                            std::sort (prev.keys.begin(), prev.keys.end());
+                            prev.qe = c.qe;
+                            v.lastEnd = prev.qe;
+                            continue;
+                        }
+                        // c starts while prev still sounds
+                        const int lost = prev.qe - c.qs;
+                        if (lost >= U && vs[(size_t) extra].lastEnd <= prev.qs)
+                        {
+                            Chord held = prev;
+                            v.chords.pop_back();
+                            place (extra, held);
+                            v.lastEnd = v.chords.empty() ? 0 : v.chords.back().qe;
+                            place (slot, c);
+                            continue;
+                        }
+                        prev.qe = c.qs; // a little overlap: written shorter
+                        v.lastEnd = c.qs;
+                        place (slot, c);
+                    }
+                }
+                // A note in an extra voice moves to the other main voice when that one is silent
+                // there and the pitches stay in order (upper voice above lower voice): two voices
+                // read better than three, and a third voice with stems the same way collides.
+                for (int slot : { upperExtra, lowerExtra })
+                {
+                    const int target = slot == upperExtra ? lowerSlot : upperSlot;
+                    const int same = slot - 2;
+                    auto& cs = vs[(size_t) slot].chords;
+                    for (size_t ci = 0; ci < cs.size();)
+                    {
+                        auto& c = cs[ci];
+                        bool free = true, ordered = true;
+                        for (auto& o : vs[(size_t) target].chords)
+                            if (o.qs < c.qe && o.qe > c.qs)
+                                free = false;
+                        for (auto& o : vs[(size_t) same].chords)
+                            if (o.qs < c.qe && o.qe > c.qs)
+                                ordered &= target == upperSlot ? c.keys.front() >= o.keys.back() : c.keys.back() <= o.keys.front();
+                        if (free && ordered)
+                        {
+                            auto& tv = vs[(size_t) target].chords;
+                            tv.insert (std::upper_bound (tv.begin(), tv.end(), c, [] (const Chord& x, const Chord& y) { return x.qs < y.qs; }), c);
+                            cs.erase (cs.begin() + (long) ci);
+                        }
+                        else
+                            ++ci;
+                    }
+                }
+                // the extra voices themselves may not overlap
+                for (int slot : { upperExtra, lowerExtra })
+                {
+                    auto& cs = vs[(size_t) slot].chords;
+                    std::stable_sort (cs.begin(), cs.end(), [] (const Chord& x, const Chord& y) { return x.qs < y.qs; });
+                    std::vector<Chord> out;
+                    for (auto& c : cs)
+                    {
+                        if (! out.empty() && out.back().qe > c.qs)
+                        {
+                            if (out.back().qs == c.qs)
+                            {
+                                for (int k : c.keys)
+                                    if (std::find (out.back().keys.begin(), out.back().keys.end(), k) == out.back().keys.end())
+                                        out.back().keys.push_back (k);
+                                std::sort (out.back().keys.begin(), out.back().keys.end());
+                                out.back().qe = juce::jmin (out.back().qe, c.qe);
+                                continue;
+                            }
+                            out.back().qe = c.qs;
+                        }
+                        out.push_back (c);
+                    }
+                    cs = std::move (out);
+                }
+                for (auto& v : vs)
+                {
+                    v.lastEnd = v.chords.empty() ? 0 : v.chords.back().qe;
+                    for (auto& c : v.chords)
+                        for (int k : c.keys)
+                        {
+                            v.pitchSum += k;
+                            v.pitchCount++;
+                        }
+                }
+                // unused extra voices at the end are dropped (the slot numbers keep the stems right)
+                while (vs.size() > 1 && vs.back().chords.empty())
+                    vs.pop_back();
+            }
             // A rest of up to a beat inside a voice, while another voice holds a note across
             // it, could only be printed hidden: the note before it is written longer instead,
             // as a copyist would, so no note is left with a flag and nothing after it.
@@ -757,6 +1055,9 @@ namespace
                                         n.division = it->second;
                                 }
                                 n.tieStop = p > 0 || (p == 0 && c.qs < ms);
+                                if (! n.tieStop)
+                                    if (auto it = ornamentAt.find ({ c.qs, key }); it != ornamentAt.end())
+                                        n.ornament = it->second;
                                 n.tieStart = p + 1 < pieces.size() || (p + 1 == pieces.size() && c.qe > me);
                                 e.notes.push_back (n);
                             }
@@ -915,8 +1216,9 @@ namespace
                                 ++count[mi];
                             }
                 // the other clef must save most notes a ledger line, in this bar and the next
-                auto wantsTreble = [&] (size_t mi) { return count[mi] > 0 && inBass[mi] - inTreble[mi] >= 0.75 * count[mi]; };
-                auto wantsBass = [&] (size_t mi) { return count[mi] > 0 && inTreble[mi] - inBass[mi] >= 0.75 * count[mi]; };
+                // (a bar with only a note or two keeps the clef it has)
+                auto wantsTreble = [&] (size_t mi) { return count[mi] >= 3 && inBass[mi] - inTreble[mi] >= 0.75 * count[mi]; };
+                auto wantsBass = [&] (size_t mi) { return count[mi] >= 3 && inTreble[mi] - inBass[mi] >= 0.75 * count[mi]; };
                 std::vector<double> mean (nm, -1);
                 for (size_t mi = 0; mi < nm; ++mi)
                     if (count[mi] > 0)
@@ -1250,12 +1552,19 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                                 if (ni == 0 && e.beam != 0)
                                     o << "<beam number=\"1\">" << (e.beam == 1 ? "begin" : e.beam == 2 ? "continue" : "end") << "</beam>";
                                 const bool markHere = ni == 0 && mark.isNotEmpty();
-                                if (n.tieStart || n.tieStop || markHere)
+                                // an ornament belongs to the top note of a chord
+                                const bool ornamentHere = n.ornament != 0 && ni + 1 == e.notes.size();
+                                if (n.tieStart || n.tieStop || markHere || ornamentHere)
                                 {
                                     o << "<notations>";
                                     if (n.tieStop) o << "<tied type=\"stop\"/>";
                                     if (n.tieStart) o << "<tied type=\"start\"/>";
                                     if (markHere) o << mark;
+                                    if (ornamentHere)
+                                        {
+                                        const juce::String place = e.stem == 2 ? " placement=\"below\"" : " placement=\"above\"";
+                                        o << "<ornaments>" << (n.ornament == 1 ? "<trill-mark" : n.ornament == 2 ? "<mordent" : "<inverted-mordent") << place << "/></ornaments>";
+                                    }
                                     o << "</notations>";
                                 }
                                 o << "</note>\n";
@@ -1352,6 +1661,11 @@ juce::String toABC (const Score& score, const Options& opt)
                         o << (e.hidden ? "x" : "z") << abcLen;
                     else
                     {
+                        int orn = 0;
+                        for (auto& n : e.notes)
+                            orn = n.ornament != 0 ? n.ornament : orn;
+                        if (orn != 0)
+                            o << (orn == 1 ? "!trill!" : orn == 2 ? "!mordent!" : "!uppermordent!");
                         if (e.notes.size() > 1)
                             o << "[";
                         for (auto& n : e.notes)
@@ -1478,6 +1792,13 @@ juce::String toLilyPond (const Score& score, const Options& opt)
                     else
                         o << pitch (e.notes[0]);
                     o << durStr (e.typeUnits, e.dots);
+                    {
+                        int orn = 0;
+                        for (auto& n : e.notes)
+                            orn = n.ornament != 0 ? n.ornament : orn;
+                        if (orn != 0)
+                            o << (orn == 1 ? "\\trill" : orn == 2 ? "\\mordent" : "\\prall");
+                    }
                     bool tie = false;
                     for (auto& n : e.notes)
                         tie |= n.tieStart;
