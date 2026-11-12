@@ -1522,62 +1522,80 @@ juce::String toMusicXML (const Score& score, const Options& opt)
     o << "  </part-list>\n";
 
     const int numParts = q.hasPedal ? 2 : 1;
-    // Where a hand changes manual: walk each manual staff in time order (all voices together)
-    // and mark the places where the manual differs from what that staff played just before,
-    // unless the old manual is still sounding there (two manuals at once need no label).
-    // A label is only written when the hand stays on the new manual for at least a beat and
-    // the last label is a beat away; quick back-and-forth is shown by the note colours alone.
-    std::map<std::tuple<int, int, int>, int> labelAt; // (measure, staff, position) -> division
+    // Where a hand changes manual, the manual is named at the staff, as organ editions do:
+    // a label goes to every note on a manual that was not sounding on this staff just before
+    // (a hand moving over, or a second manual joining in). With two manuals on one staff the
+    // upper voice is named above the staff, the lower one below.
+    // With colours on, quick back-and-forth is left to the colours: a label then needs the hand
+    // to stay a beat on the new manual, and a beat since the last label.
+    std::map<std::tuple<int, int, int, int>, bool> labelAt; // (measure, staff, position, division) -> below the staff
     if (q.manualsUsed > 1)
         for (int k = 0; k < (int) q.staves.size(); ++k)
         {
             if (q.staves[(size_t) k].part != 0)
                 continue;
             auto& st = q.staves[(size_t) k];
-            struct Ev { int abs, mi, start, end, division; bool oldSounding; };
+            struct Ev { int abs, mi, start, end, division; bool lower, tied; };
             std::vector<Ev> all;
-            int current = -1;
             for (int mi = 0; mi < (int) q.measures.size(); ++mi)
             {
                 const int ms = q.measures[(size_t) mi].start;
-                std::vector<const QEvent*> evs;
+                int voicesWithNotes = 0;
                 for (auto& voice : st.voices)
                     for (auto& e : voice[(size_t) mi])
-                        if (! e.rest && ! e.notes.empty() && ! e.notes.front().tieStop)
-                            evs.push_back (&e);
-                std::stable_sort (evs.begin(), evs.end(), [] (auto* a, auto* b) { return a->start < b->start; });
-                for (auto* e : evs)
-                {
-                    const int dv = e->notes.front().division;
-                    if (dv < 0)
-                        continue;
-                    bool oldStillSounding = false;
-                    if (dv != current)
-                        for (auto* o : evs)
-                            oldStillSounding |= o != e && o->notes.front().division == current && o->start < e->start + e->dur
-                                                && o->start + o->dur > e->start;
-                    all.push_back ({ ms + e->start, mi, e->start, ms + e->start + e->dur, dv, oldStillSounding });
-                    current = dv;
-                }
+                        if (! e.rest)
+                        {
+                            ++voicesWithNotes;
+                            break;
+                        }
+                for (int v = 0; v < (int) st.voices.size(); ++v)
+                    for (auto& e : st.voices[(size_t) v][(size_t) mi])
+                        if (! e.rest && ! e.notes.empty() && e.notes.front().division >= 0)
+                            all.push_back ({ ms + e.start, mi, e.start, ms + e.start + e.dur, e.notes.front().division,
+                                             voicesWithNotes > 1 && v % 2 == 1, e.notes.front().tieStop });
             }
-            current = -1;
+            std::stable_sort (all.begin(), all.end(), [] (const Ev& x, const Ev& y) { return x.abs < y.abs; });
+            if (! opt.colourManuals)
+            {
+                for (size_t i = 0; i < all.size(); ++i)
+                {
+                    auto& e = all[i];
+                    // a manual this staff has played within the last beat (or holds now) needs no
+                    // name; one that comes back after a while, or is new, gets it
+                    if (e.tied)
+                        continue;
+                    bool known = false;
+                    size_t from = i;
+                    while (from > 0 && all[from - 1].abs > e.abs - 16 * U)
+                        --from;
+                    for (size_t j = from; j < all.size() && all[j].abs <= e.abs && ! known; ++j)
+                        known = j != i && all[j].division == e.division && (all[j].abs < e.abs || j < i) && all[j].end >= e.abs - U;
+                    if (! known)
+                        labelAt[{ e.mi, k, e.start, e.division }] = e.lower;
+                }
+                continue;
+            }
+            int current = -1;
             int lastLabel = -(1 << 30);
             for (size_t i = 0; i < all.size(); ++i)
             {
                 auto& e = all[i];
                 if (e.division == current)
                     continue;
+                bool oldSounding = false;
+                for (size_t j = 0; j < i; ++j)
+                    oldSounding |= all[j].division == current && all[j].end > e.abs;
                 current = e.division;
                 int runEnd = e.end;
                 for (size_t j = i + 1; j < all.size() && all[j].division == e.division; ++j)
                     runEnd = juce::jmax (runEnd, all[j].end);
-                if (e.oldSounding || runEnd - e.abs < U || e.abs - lastLabel < U)
+                if (oldSounding || runEnd - e.abs < U || e.abs - lastLabel < U)
                     continue;
-                labelAt[{ e.mi, k, e.start }] = e.division;
+                labelAt[{ e.mi, k, e.start, e.division }] = false;
                 lastLabel = e.abs;
             }
         }
-    std::set<std::tuple<int, int, int>> labelled;
+    std::set<std::tuple<int, int, int, int>> labelled;
     for (int part = 0; part < numParts; ++part)
     {
         std::vector<int> staffIdx;
@@ -1694,25 +1712,36 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                             o << "<duration>" << e.dur << "</duration>";
                         };
                         // a hand moves to another manual: say so at the staff, as organ editions do
-                        const auto labelIt = labelAt.find ({ mi, k, e.start });
-                        if (! e.rest && part == 0 && labelIt != labelAt.end() && labelIt->second >= 0
-                            && labelled.insert ({ mi, k, e.start }).second)
+                        if (! e.rest && part == 0)
                         {
-                            const int dv = labelIt->second;
-                            auto label = divisionAbbreviation (juce::isPositiveAndBelow (dv, (int) opt.divisionNames.size()) ? opt.divisionNames[(size_t) dv] : juce::String(),
-                                                               dv, false);
-                            // the registration printed at this place already names the division
-                            bool named = false, crowded = false;
-                            for (auto& rt : regTexts)
-                                if (rt.part == 0)
-                                {
-                                    named |= rt.measure == mi && rt.division == label && std::abs (rt.pos - e.start) < U;
-                                    // a registration line above this staff nearby: the label goes under the staff
-                                    crowded |= std::abs ((q.measures[(size_t) rt.measure].start + rt.pos) - (m.start + e.start)) < 2 * q.measures[(size_t) mi].length;
-                                }
-                            if (! named)
-                                o << "      <direction placement=\"" << (k == 0 && ! crowded ? "above" : "below") << "\"><direction-type><words font-weight=\"bold\" color=\""
-                                  << manualColour (dv) << "\">" << esc (label) << "</words></direction-type><staff>" << (k + 1) << "</staff></direction>\n";
+                            std::set<int> divs;
+                            for (auto& n : e.notes)
+                                if (n.division >= 0)
+                                    divs.insert (n.division);
+                            for (int dv : divs)
+                            {
+                                const auto labelIt = labelAt.find ({ mi, k, e.start, dv });
+                                if (labelIt == labelAt.end() || ! labelled.insert ({ mi, k, e.start, dv }).second)
+                                    continue;
+                                auto label = divisionAbbreviation (juce::isPositiveAndBelow (dv, (int) opt.divisionNames.size()) ? opt.divisionNames[(size_t) dv] : juce::String(),
+                                                                   dv, false);
+                                // the registration printed at this place already names the division
+                                bool named = false, crowded = false;
+                                for (auto& rt : regTexts)
+                                    if (rt.part == 0)
+                                    {
+                                        named |= rt.measure == mi && rt.division == label && std::abs (rt.pos - e.start) < U;
+                                        // a registration line above this staff nearby: the label goes under the staff
+                                        crowded |= std::abs ((q.measures[(size_t) rt.measure].start + rt.pos) - (m.start + e.start)) < 2 * q.measures[(size_t) mi].length;
+                                    }
+                                if (named)
+                                    continue;
+                                const bool below = labelIt->second || k > 0 || crowded;
+                                o << "      <direction placement=\"" << (below ? "below" : "above") << "\"><direction-type><words";
+                                if (opt.colourManuals)
+                                    o << " font-weight=\"bold\" color=\"" << manualColour (dv) << "\"";
+                                o << ">" << esc (label) << "</words></direction-type><staff>" << (k + 1) << "</staff></direction>\n";
+                            }
                         }
                         if (e.rest)
                         {
@@ -1737,7 +1766,7 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                             for (size_t ni = 0; ni < e.notes.size(); ++ni)
                             {
                                 auto& n = e.notes[ni];
-                                const bool colourIt = q.manualsUsed > 1 && part == 0 && n.division > 0;
+                                const bool colourIt = opt.colourManuals && q.manualsUsed > 1 && part == 0 && n.division > 0;
                                 o << "      <note" << (colourIt ? " color=\"" + manualColour (n.division) + "\"" : juce::String()) << ">"
                                   << (ni > 0 ? "<chord/>" : "") << "<pitch><step>" << juce::String::charToString (stepName[n.step]) << "</step>";
                                 if (n.alter != 0)

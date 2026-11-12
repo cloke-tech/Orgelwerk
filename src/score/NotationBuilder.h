@@ -16,6 +16,9 @@ namespace NotationBuilder
         std::vector<juce::String> divisionNames; // indexed by division ("Hauptwerk", "Pedal"...)
         std::vector<bool> divisionIsPedal;
         juce::String manualName = "Manual", pedalName = "Pedal";
+        // false: black notes, the manual named at every change (as printed organ music);
+        // true: notes in their manual's colour as well
+        bool colourManuals = false;
         // the registration the file asks for, from a beat on (stop names as printed)
         struct RegistrationMark
         {

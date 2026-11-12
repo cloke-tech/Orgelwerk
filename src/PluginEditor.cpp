@@ -348,6 +348,17 @@ void OrgelEditor::runDeskTest()
     }
 }
 
+// Notes in black with the manual named at each change (as printed), or coloured by manual.
+void OrgelEditor::toggleManualColours()
+{
+    proc.colourManuals = ! proc.colourManuals;
+    proc.reengrave();
+    for (auto* p : plates)
+        p->repaint();
+    if (proc.isStandalone())
+        menuItemsChanged();
+}
+
 void OrgelEditor::togglePlay()
 {
     if (proc.isPlaying())
@@ -1019,6 +1030,7 @@ juce::PopupMenu OrgelEditor::getMenuForIndex (int index, const juce::String&)
     {
         m.addItem (item (30, "Noten in Seitenbreite", {}, true, desk.isZoomed()));
         m.addItem (item (31, juce::String::fromUTF8 ("Beim Abspielen mitblättern"), {}, true, desk.isFollowing()));
+        m.addItem (item (32, "Manuale in den Noten farbig", {}, true, proc.colourManuals));
     }
     return m;
 }
@@ -1067,6 +1079,7 @@ void OrgelEditor::menuItemSelected (int id, int)
         case 26: proc.organ.allNotesOff(); break;
         case 30: desk.setZoomed (! desk.isZoomed()); break;
         case 31: desk.setFollowing (! desk.isFollowing()); break;
+        case 32: toggleManualColours(); break;
         default: break;
     }
     menuItemsChanged();
@@ -1152,6 +1165,7 @@ void OrgelEditor::showOptionsMenu()
         transpose.addItem (1000 + t, (t > 0 ? "+" : "") + juce::String (t) + juce::String::fromUTF8 (" Halbtöne"), true, proc.organ.transpose == t);
     m.addSubMenu ("Transposition", transpose);
     m.addItem (6, juce::String::fromUTF8 ("Pfeifen räumlich aufstellen (Werke im Raum, C/Cis-Seiten)"), true, proc.organ.spatial);
+    m.addItem (7, "Manuale in den Noten farbig", true, proc.colourManuals);
     m.addSeparator();
     m.addItem (4, juce::String::fromUTF8 ("Orgel auf Standard zurücksetzen"));
     m.addItem (5, juce::String::fromUTF8 ("Alle Töne aus (Panik)"));
@@ -1173,6 +1187,8 @@ void OrgelEditor::showOptionsMenu()
             proc.organ.allNotesOff();
         if (r == 6)
             proc.organ.setSpatial (! proc.organ.spatial);
+        if (r == 7)
+            toggleManualColours();
         if (r >= 994 && r <= 1006)
             proc.organ.setTranspose (r - 1000);
     });

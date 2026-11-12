@@ -39,6 +39,7 @@ namespace Formats
         std::vector<bool> divisionIsPedal;
         std::vector<DivisionRegistration> registration;
         std::shared_ptr<SoundFont> soundFont; // for the stop names
+        bool colourManuals = false;           // notes in their manual's colour
         static OrganInfo from (OrganEngine& organ, std::vector<DivisionRegistration> registration);
     };
 
@@ -69,6 +70,7 @@ namespace Formats
         std::vector<std::pair<double, juce::String>> registrationMarks;
         // the file's registration over time (empty: keep the organ as it is)
         std::vector<DivisionRegistration> registrationTimeline;
+        bool colourManuals = false;
         std::function<bool (float)> progress; // return false to cancel
         std::vector<int>* voiceStats = nullptr; // optional: most voices per 30 s (tests)
     };

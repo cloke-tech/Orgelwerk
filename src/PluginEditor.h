@@ -70,6 +70,7 @@ private:
     void timerCallback() override;
     void animate();
     void runDeskTest();
+    void toggleManualColours();
     juce::VBlankAttachment vblank;
     double lastAnimate = 0;
     void rebuildConsole();

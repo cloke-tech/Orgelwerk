@@ -106,6 +106,7 @@ public:
     void setPartDivision (int part, int division);
     std::vector<bool> partIsPedal() const;
     bool applyFileRegistration = true;
+    bool colourManuals = false; // notes in their manual's colour (else black, as printed)
     void applyPieceRegistration();
     bool hostSync = false;
 

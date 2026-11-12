@@ -609,7 +609,7 @@ DivisionPlate::Texts DivisionPlate::texts() const
 void DivisionPlate::refresh()
 {
     auto t = texts();
-    const auto key = t.title + "|" + t.midi + (t.learning ? "L" : "");
+    const auto key = t.title + "|" + t.midi + (t.learning ? "L" : "") + (proc.colourManuals ? "C" : "");
     if (key != shownKey)
     {
         shownKey = key;
@@ -627,8 +627,8 @@ void DivisionPlate::paint (juce::Graphics& g)
     auto r = getLocalBounds().toFloat().reduced (3.0f, 3.0f);
     auto plate = r.removeFromTop (juce::jmin (22.0f, r.getHeight() * 0.55f));
     theme::drawPlate (g, plate, title, 13.0f);
-    // the colour this manual's notes have on the music desk
-    if (! t.pedal)
+    // the colour this manual's notes have on the music desk (when the notes are coloured)
+    if (! t.pedal && proc.colourManuals)
     {
         auto dot = plate.removeFromLeft (plate.getHeight()).reduced (5.0f);
         g.setColour (juce::Colour::fromString ("FF" + NotationBuilder::manualColour (division).substring (1)));

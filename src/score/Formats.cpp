@@ -121,6 +121,7 @@ OrganInfo OrganInfo::from (OrganEngine& organ, std::vector<DivisionRegistration>
 static void applyOrganInfo (NotationBuilder::Options& opt, const OrganInfo& info)
 {
     opt.divisionNames = info.divisionNames;
+    opt.colourManuals = info.colourManuals;
     opt.divisionIsPedal = info.divisionIsPedal;
     if (info.soundFont == nullptr)
         return;
@@ -230,7 +231,9 @@ std::vector<ExportFormat> exportFormats()
 
 static OrganInfo organInfoOf (const ExportContext& ctx)
 {
-    return ctx.liveOrgan != nullptr ? OrganInfo::from (*ctx.liveOrgan, ctx.registrationTimeline) : OrganInfo {};
+    auto info = ctx.liveOrgan != nullptr ? OrganInfo::from (*ctx.liveOrgan, ctx.registrationTimeline) : OrganInfo {};
+    info.colourManuals = ctx.colourManuals;
+    return info;
 }
 
 static NotationBuilder::Options builderOptions (const ExportContext& ctx)
