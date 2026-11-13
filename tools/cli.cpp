@@ -65,6 +65,26 @@ int main (int argc, char** argv)
             std::cout << " " << sf->presetName (rs.bank, rs.program) << (rs.octave != 0 ? " oct" + juce::String (rs.octave) : juce::String());
         std::cout << "\n";
     }
+    if (cmd == "continuous")
+    {
+        std::vector<bool> isPedal;
+        for (int d : map)
+            isPedal.push_back (d >= 0 && d == organ.pedalIndex());
+        auto t1 = juce::Time::getMillisecondCounterHiRes();
+        juce::String err;
+        auto n = Formats::engraveContinuous (*piece, isPedal, map, err, Formats::OrganInfo::from (organ, ScoreIO::registrationTimeline (*piece->score, map)));
+        if (n == nullptr)
+        {
+            std::cout << "  continuous failed: " << err << "\n";
+            return 6;
+        }
+        auto svg = n->getPageSVG (0);
+        std::cout << "  continuous: " << n->getPageCount() << " page(s), " << (int) (juce::Time::getMillisecondCounterHiRes() - t1)
+                  << " ms, svg " << svg.length() / 1024 << " KB, timemap " << n->getTimemap().size() << "\n";
+        if (argc > 3)
+            juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]).replaceWithText (svg);
+        return 0;
+    }
     if (cmd == "stops")
     {
         auto count = [&] {

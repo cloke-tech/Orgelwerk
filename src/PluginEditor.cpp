@@ -347,17 +347,26 @@ void OrgelEditor::runScreenshot()
             if (wait < 40)
                 break;
             save ("orgelwerk-seitenbreite");
-            proc.pause();
-            desk.setZoomed (savedZoom);
-            proc.organ.master = savedMaster;
+            desk.setView (MusicDesk::View::continuous);
             step = 4;
             wait = 0;
             break;
         case 4:
+            // the long line is set in the background first
+            if (wait < 90)
+                break;
+            save ("orgelwerk-fortlaufend");
+            proc.pause();
+            desk.setView (savedZoom ? MusicDesk::View::pageWidth : MusicDesk::View::pages);
+            proc.organ.master = savedMaster;
+            step = 5;
+            wait = 0;
+            break;
+        case 5:
             if (wait < 5)
                 break;
             juce::JUCEApplicationBase::quit();
-            step = 5;
+            step = 6;
             break;
         default:
             break;
@@ -1106,7 +1115,10 @@ juce::PopupMenu OrgelEditor::getMenuForIndex (int index, const juce::String&)
     }
     else if (index == 3)
     {
-        m.addItem (item (30, tr ("Noten in Seitenbreite"), {}, true, desk.isZoomed()));
+        m.addItem (item (30, MusicDesk::viewName (MusicDesk::View::pages), {}, true, desk.getView() == MusicDesk::View::pages));
+        m.addItem (item (34, MusicDesk::viewName (MusicDesk::View::pageWidth), {}, true, desk.getView() == MusicDesk::View::pageWidth));
+        m.addItem (item (35, MusicDesk::viewName (MusicDesk::View::continuous), {}, true, desk.getView() == MusicDesk::View::continuous));
+        m.addSeparator();
         m.addItem (item (31, tr ("Beim Abspielen mitblättern"), {}, true, desk.isFollowing()));
         m.addItem (item (33, tr ("Eigene Notensysteme je Manual"), {}, true, proc.staffPerManual));
         m.addItem (item (32, tr ("Manuale in den Noten farbig"), {}, true, proc.colourManuals));
@@ -1190,7 +1202,9 @@ void OrgelEditor::menuItemSelected (int id, int)
         case 22: proc.organ.setSpatial (! proc.organ.spatial); break;
         case 25: proc.organ.setDefaultDisposition(); break;
         case 26: proc.organ.allNotesOff(); break;
-        case 30: desk.setZoomed (! desk.isZoomed()); break;
+        case 30: desk.setView (MusicDesk::View::pages); break;
+        case 34: desk.setView (MusicDesk::View::pageWidth); break;
+        case 35: desk.setView (MusicDesk::View::continuous); break;
         case 31: desk.setFollowing (! desk.isFollowing()); break;
         case 32: toggleManualColours(); break;
         case 33: proc.staffPerManual = ! proc.staffPerManual; proc.reengrave(); menuItemsChanged(); break;

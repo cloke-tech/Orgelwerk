@@ -100,6 +100,9 @@ public:
     // pages of a MIDI file are set on request (click on the music desk)
     void requestEngraving();
     bool isEngraving() const { return engraving.load(); }
+    // the piece on one long line for the continuous view, set in the background
+    void requestContinuous();
+    bool isEngravingContinuous() const { return engravingContinuous.load(); }
     juce::String takeLoadMessage();
     std::shared_ptr<Piece> getPiece() const;
     const std::vector<int>& getPartDivision() const { return partDivision; }
@@ -146,6 +149,7 @@ public:
     Formats::ExportContext makeExportContext() const;
     // sets the pages again (parts moved, registration shown or not); only if they are shown
     void reengrave (bool evenIfNotShown = false);
+    std::atomic<bool> engravingContinuous { false };
     double getSampleRateForExport() const { return currentSampleRate > 0 ? currentSampleRate : 48000.0; }
 
 private:

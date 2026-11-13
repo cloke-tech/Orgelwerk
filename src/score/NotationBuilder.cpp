@@ -514,11 +514,19 @@ namespace
             if (q.perManual)
                 manualGroups.assign (manuals.rbegin(), manuals.rend());
             else
+            {
                 manualGroups.push_back (-1);
+                for (int d : manuals)
+                    if (opt.ownPartDivisions.count (d))
+                        manualGroups.push_back (d);
+            }
         }
         auto groupOf = [&] (int division) {
             for (int g = 0; g < (int) manualGroups.size(); ++g)
-                if (manualGroups[(size_t) g] == division || manualGroups[(size_t) g] == -1)
+                if (manualGroups[(size_t) g] == division)
+                    return g;
+            for (int g = 0; g < (int) manualGroups.size(); ++g)
+                if (manualGroups[(size_t) g] == -1)
                     return g;
             return 0;
         };
@@ -1765,28 +1773,34 @@ juce::String toMusicXML (const Score& score, const Options& opt)
                     // triplet groups: one "3" per beat and staff, with a bracket unless the
                     // group is one beamed run or has hidden rests in it
                     std::map<const QEvent*, juce::String> tupletMark; // event -> "<tuplet .../>"
+                    // Every triplet group is written as one (other programs need that to read
+                    // it); the ones that are not shown get neither number nor bracket.
                     for (size_t i = 0; i < evs.size(); ++i)
                     {
-                        size_t j = 0;
-                        bool bracket = false;
-                        if (! tupletShown (evs, i, j, bracket))
+                        if (! evs[i].tupletStart)
                             continue;
+                        size_t j = i;
+                        while (j + 1 < evs.size() && ! evs[j].tupletStop)
+                            ++j;
+                        bool bracket = false;
+                        size_t jShown = 0;
+                        bool shown = tupletShown (evs, i, jShown, bracket);
                         const int beatNo = (m.start + evs[i].start) / U;
-                        bool markedAbove = false;
-                        for (int w = 0; w < v && ! markedAbove; ++w)
+                        for (int w = 0; w < v && shown; ++w)
                         {
                             auto& other = st.voices[(size_t) w][(size_t) mi];
-                            for (size_t i2 = 0; i2 < other.size() && ! markedAbove; ++i2)
+                            for (size_t i2 = 0; i2 < other.size() && shown; ++i2)
                             {
                                 size_t j2 = 0;
                                 bool b2 = false;
-                                markedAbove = (m.start + other[i2].start) / U == beatNo && tupletShown (other, i2, j2, b2);
+                                if ((m.start + other[i2].start) / U == beatNo && tupletShown (other, i2, j2, b2))
+                                    shown = false;
                             }
                         }
-                        if (markedAbove)
-                            continue;
-                        tupletMark[&evs[i]] = juce::String ("<tuplet type=\"start\" bracket=\"") + (bracket ? "yes" : "no") + "\"/>";
+                        tupletMark[&evs[i]] = shown ? juce::String ("<tuplet type=\"start\" bracket=\"") + (bracket ? "yes" : "no") + "\"/>"
+                                                    : juce::String ("<tuplet type=\"start\" bracket=\"no\" show-number=\"none\"/>");
                         tupletMark[&evs[j]] += "<tuplet type=\"stop\"/>";
+                        i = j;
                     }
                     const juce::String timeMod = "<time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification>";
                     for (auto& e : evs)

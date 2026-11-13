@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include "Score.h"
 
 namespace orgel
@@ -23,6 +24,8 @@ namespace NotationBuilder
         // and staves are hidden in lines where they have nothing to play;
         // false: the classic three staves (right hand, left hand, pedal)
         bool staffPerManual = false;
+        // divisions that always get a part of their own (also in the classic layout)
+        std::set<int> ownPartDivisions;
         // the registration the file asks for, from a beat on (stop names as printed)
         struct RegistrationMark
         {

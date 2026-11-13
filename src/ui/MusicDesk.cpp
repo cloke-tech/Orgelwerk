@@ -7,28 +7,35 @@ static const juce::Colour highlightColour { 0xffc0392b };
 
 MusicDesk::MusicDesk (OrgelProcessor& p) : proc (p)
 {
-    prev.onClick = [this] { stopFollowing(); showPage (currentPage() - visiblePages()); };
-    next.onClick = [this] { stopFollowing(); showPage (currentPage() + visiblePages()); };
+    prev.onClick = [this] {
+        stopFollowing();
+        if (view == View::continuous)
+            lineXTarget = juce::jlimit (0.0, maxLineX(), lineXTarget - viewArea().getWidth() * 0.8);
+        else
+            showPage (currentPage() - visiblePages());
+    };
+    next.onClick = [this] {
+        stopFollowing();
+        if (view == View::continuous)
+            lineXTarget = juce::jlimit (0.0, maxLineX(), lineXTarget + viewArea().getWidth() * 0.8);
+        else
+            showPage (currentPage() + visiblePages());
+    };
     followButton.setToggleState (true, juce::dontSendNotification);
     followButton.onClick = [this] { follow = followButton.getToggleState(); };
     followButton.setColour (juce::ToggleButton::textColourId, theme::text);
     followButton.setColour (juce::ToggleButton::tickColourId, theme::gold);
     pageLabel.setJustificationType (juce::Justification::centred);
-    zoomButton.setButtonText (tr ("Seitenbreite"));
-    zoomButton.setTooltip (tr ("Zwischen ganzer Seite und Seitenbreite (größere Noten, scrollt mit) umschalten"));
-    zoomButton.setClickingTogglesState (true);
+    zoomButton.setButtonText (viewName (view) + juce::String::fromUTF8 (" \xe2\x96\xbe"));
+    zoomButton.setTooltip (tr ("Ansicht der Noten: ganze Seiten, Seitenbreite oder fortlaufend"));
     zoomButton.onClick = [this] {
-        // stay at the same page when switching
-        const int page = currentPage();
-        zoomed = zoomButton.getToggleState();
-        zoomButton.setButtonText (zoomed ? tr ("Ganze Seite") : tr ("Seitenbreite"));
-        turnFrom = -1;
-        if (zoomed)
-            scroll = scrollTarget = page;
-        else
-            firstPage = visiblePages() == 2 ? page - (page % 2) : page;
-        updateNav();
-        repaint();
+        juce::PopupMenu m;
+        for (auto v : { View::pages, View::pageWidth, View::continuous })
+            m.addItem (1 + (int) v, viewName (v), true, view == v);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&zoomButton), [this] (int r) {
+            if (r > 0)
+                setView ((View) (r - 1));
+        });
     };
     pageLabel.setColour (juce::Label::textColourId, theme::text);
     for (auto* c : std::initializer_list<juce::Component*> { &prev, &next, &zoomButton, &followButton, &pageLabel })
@@ -38,30 +45,241 @@ MusicDesk::MusicDesk (OrgelProcessor& p) : proc (p)
     updateNav();
 }
 
+juce::String MusicDesk::viewName (View v)
+{
+    switch (v)
+    {
+        case View::pageWidth: return tr ("Seitenbreite");
+        case View::continuous: return tr ("Fortlaufend");
+        default: return tr ("Ganze Seite");
+    }
+}
+
+void MusicDesk::setView (View v)
+{
+    if (v == view)
+        return;
+    // stay at the same page when switching between pages and page width
+    const int page = currentPage();
+    view = v;
+    zoomed = v == View::pageWidth;
+    zoomButton.setButtonText (viewName (view) + juce::String::fromUTF8 (" \xe2\x96\xbe"));
+    turnFrom = -1;
+    if (v == View::pageWidth)
+        scroll = scrollTarget = page;
+    else if (v == View::pages)
+        firstPage = visiblePages() == 2 ? page - (page % 2) : page;
+    else
+        prepareLine();
+    resetFollowState();
+    updateNav();
+    repaint();
+}
+
+// the engraving the current view shows (the long line in the continuous view)
+std::shared_ptr<Notation> MusicDesk::shownNotation() const
+{
+    if (piece == nullptr)
+        return {};
+    return view == View::continuous ? lineNotation : piece->notation;
+}
+
+// what is sounding is looked up again in the engraving now shown
+void MusicDesk::resetFollowState()
+{
+    active.clear();
+    timemapIndex = 0;
+    lastBeat = -1;
+    followNote = {};
+    noteBeat.clear();
+    if (auto n = shownNotation())
+        for (auto& e : n->getTimemap())
+            for (auto& id : e.on)
+                if (! noteBeat.count (id))
+                    noteBeat[id] = e.qstamp;
+}
+
+// The continuous view needs the piece set on one long line: asked for once, then read in the
+// background (twice: one copy for the screen's highlights, one the tile drawing may use freely).
+void MusicDesk::prepareLine()
+{
+    if (piece == nullptr)
+        return;
+    auto n = piece->continuous;
+    if (n == nullptr)
+    {
+        proc.requestContinuous();
+        return;
+    }
+    if (n == lineNotation)
+        return;
+    lineNotation = n;
+    line.reset();
+    tileDrawable.reset();
+    tiles.clear();
+    tilesPending.clear();
+    lineX = lineXTarget = 0;
+    const int gen = ++lineGeneration;
+    resetFollowState();
+    juce::Component::SafePointer<MusicDesk> safe (this);
+    pagePool.addJob ([n, gen, safe] {
+        const auto svg = n->getPageSVG (0);
+        auto page = std::make_shared<Page>();
+        std::shared_ptr<juce::Drawable> forTiles;
+        if (auto xml = juce::parseXML (svg))
+        {
+            page->drawable = juce::Drawable::createFromSVG (*xml);
+            forTiles = juce::Drawable::createFromSVG (*xml);
+        }
+        if (page->drawable != nullptr)
+        {
+            std::function<void (juce::Drawable*)> walk = [&] (juce::Drawable* d) {
+                if (d->getComponentID().isNotEmpty())
+                    page->ids[d->getComponentID()] = d;
+                for (auto* c : d->getChildren())
+                    if (auto* cd = dynamic_cast<juce::Drawable*> (c))
+                        walk (cd);
+            };
+            walk (page->drawable.get());
+        }
+        juce::MessageManager::callAsync ([safe, page, forTiles, gen] {
+            if (safe == nullptr || gen != safe->lineGeneration || page->drawable == nullptr)
+                return;
+            safe->line = std::make_unique<Page> (std::move (*page));
+            safe->tileDrawable = forTiles;
+            safe->updateNav();
+            safe->repaint();
+        });
+    });
+}
+
+// where the whole line is drawn now: as tall as the desk allows, scrolled by lineX
+juce::Rectangle<float> MusicDesk::lineRect() const
+{
+    auto va = viewArea();
+    if (line == nullptr || line->drawable == nullptr)
+        return {};
+    auto b = line->drawable->getDrawableBounds();
+    if (b.getHeight() <= 0)
+        return {};
+    const float s = va.getHeight() * 0.94f / b.getHeight();
+    return { va.getX() - (float) lineX, va.getCentreY() - b.getHeight() * s / 2, b.getWidth() * s, b.getHeight() * s };
+}
+
+double MusicDesk::maxLineX() const
+{
+    return juce::jmax (0.0, (double) lineRect().getWidth() - viewArea().getWidth());
+}
+
+void MusicDesk::paintLine (juce::Graphics& g)
+{
+    auto va = viewArea();
+    g.setColour (juce::Colours::black.withAlpha (0.35f));
+    g.fillRect (va.translated (4, 5));
+    g.setColour (juce::Colour (0xfffdfbf5));
+    g.fillRect (va);
+    if (line == nullptr)
+    {
+        g.setColour (juce::Colours::grey);
+        g.setFont (theme::serif (18.0f));
+        g.drawFittedText (tr ("Noten werden gesetzt…"), va.reduced (30).toNearestInt(), juce::Justification::centred, 2);
+        return;
+    }
+    const auto r = lineRect();
+    const float phys = g.getInternalContext().getPhysicalPixelScaleFactor();
+    // tiles belong to one size: after a resize they are drawn again
+    const auto key = juce::String (r.getHeight(), 2) + "/" + juce::String (phys, 2) + "/" + juce::String (lineGeneration);
+    if (key != tileKey)
+    {
+        tileKey = key;
+        tiles.clear();
+        tilesPending.clear();
+    }
+    const juce::Graphics::ScopedSaveState save (g);
+    g.reduceClipRegion (va.toNearestInt());
+    const int first = juce::jmax (0, (int) std::floor (lineX / tileWidth));
+    const int last = (int) std::floor ((lineX + va.getWidth()) / tileWidth);
+    const int count = (int) std::ceil (r.getWidth() / tileWidth);
+    for (int i = first; i <= last && i < count; ++i)
+    {
+        if (auto it = tiles.find (i); it != tiles.end())
+            g.drawImage (it->second, { r.getX() + i * tileWidth, r.getY(), tileWidth, r.getHeight() });
+        else
+            requestTile (i, phys);
+    }
+    // the next tiles in reading direction, so scrolling finds them ready
+    for (int i = last + 1; i <= last + 2 && i < count; ++i)
+        requestTile (i, phys);
+    // drop tiles far away
+    for (auto it = tiles.begin(); it != tiles.end();)
+        it = (it->first < first - 3 || it->first > last + 6) ? tiles.erase (it) : std::next (it);
+    for (auto& id : active)
+        if (auto it = line->ids.find (id); it != line->ids.end())
+            drawHighlighted (g, *line, it->second, r);
+}
+
+void MusicDesk::requestTile (int index, float physicalScale)
+{
+    if (tileDrawable == nullptr || tilesPending.count (index) || tiles.count (index))
+        return;
+    tilesPending.insert (index);
+    const auto r = lineRect();
+    const auto bounds = tileDrawable->getDrawableBounds();
+    const float s = r.getHeight() / bounds.getHeight();
+    auto drawable = tileDrawable;
+    const auto key = tileKey;
+    juce::Component::SafePointer<MusicDesk> safe (this);
+    pagePool.addJob ([drawable, bounds, s, physicalScale, index, key, safe, height = r.getHeight()] {
+        const int w = juce::roundToInt (tileWidth * physicalScale), h = juce::jmax (1, juce::roundToInt (height * physicalScale));
+        juce::Image img (juce::Image::RGB, w, h, false);
+        {
+            juce::Graphics g (img);
+            g.fillAll (juce::Colour (0xfffdfbf5));
+            // only the measures inside this tile are drawn (the others fall outside the clip)
+            auto t = juce::AffineTransform::translation (-bounds.getX(), -bounds.getY())
+                         .scaled (s * physicalScale)
+                         .translated (-(float) index * tileWidth * physicalScale, 0.0f);
+            drawable->draw (g, 1.0f, t);
+        }
+        juce::MessageManager::callAsync ([safe, img, index, key] {
+            if (safe == nullptr || key != safe->tileKey)
+                return;
+            safe->tilesPending.erase (index);
+            safe->tiles[index] = img;
+            safe->repaint (safe->viewArea().toNearestInt());
+        });
+    });
+}
+
 void MusicDesk::setPiece (std::shared_ptr<Piece> p)
 {
     const bool sameNotation = piece != nullptr && p != nullptr && piece->notation == p->notation;
     piece = std::move (p);
     if (sameNotation)
+    {
+        // the same pages (perhaps the long line for the continuous view has arrived)
+        if (view == View::continuous)
+            prepareLine();
         return;
+    }
     pages.clear();
     pending.clear();
     ++generation;
     pagePool.removeAllJobs (false, 0);
+    // the long line is made again for the new engraving (jobs for it were just dropped)
+    lineNotation = nullptr;
+    line.reset();
+    tileDrawable.reset();
+    tiles.clear();
+    tilesPending.clear();
+    ++lineGeneration;
     turnFrom = -1;
     scroll = scrollTarget = 0.0;
     shownPageForLabel = -1;
-    followNote = {};
-    active.clear();
-    noteBeat.clear();
-    timemapIndex = 0;
-    lastBeat = -1;
     firstPage = 0;
-    if (piece != nullptr && piece->notation != nullptr)
-        for (auto& e : piece->notation->getTimemap())
-            for (auto& id : e.on)
-                if (! noteBeat.count (id))
-                    noteBeat[id] = e.qstamp;
+    if (view == View::continuous)
+        prepareLine();
+    resetFollowState();
     tallestLine = 0.0f;
     measureLines();
     status = piece == nullptr ? juce::String (tr ("Noten hierher ziehen oder über „Öffnen“ laden"))
@@ -319,6 +537,11 @@ void MusicDesk::paint (juce::Graphics& g)
     g.setColour (theme::gold.withAlpha (0.4f));
     g.drawLine (ledge.getX(), ledge.getY(), ledge.getRight(), ledge.getY(), 1.0f);
 
+    if (view == View::continuous && piece != nullptr)
+    {
+        paintLine (g);
+        return;
+    }
     const int count = piece != nullptr && piece->notation != nullptr ? piece->notation->getPageCount() : 0;
     if (count == 0)
     {
@@ -454,6 +677,15 @@ void MusicDesk::updateNav()
 {
     const int count = pageCount();
     const int n = visiblePages();
+    if (view == View::continuous)
+    {
+        prev.setEnabled (lineX > 0.5);
+        next.setEnabled (lineX < maxLineX() - 0.5);
+        const double total = juce::jmax (1.0, (double) lineRect().getWidth());
+        pageLabel.setText (line == nullptr ? juce::String() : juce::String (juce::roundToInt ((lineX + viewArea().getWidth() * 0.3) * 100.0 / total)) + " %",
+                           juce::dontSendNotification);
+        return;
+    }
     if (zoomed)
     {
         const int page = currentPage();
@@ -520,6 +752,14 @@ void MusicDesk::setHighlight (const juce::String& id, bool)
 // screen area of a note on a visible page (empty if it is not shown)
 juce::Rectangle<int> MusicDesk::areaOfNote (const juce::String& id)
 {
+    if (view == View::continuous)
+    {
+        if (line != nullptr)
+            if (auto n = line->ids.find (id); n != line->ids.end())
+                return elementArea (*line, n->second, lineRect()).expanded (3.0f).getSmallestIntegerContainer()
+                    .getIntersection (viewArea().expanded (6.0f).toNearestInt());
+        return {};
+    }
     for (int index : shownPages())
     {
         auto it = pages.find (index);
@@ -569,15 +809,23 @@ void MusicDesk::update (double dt)
             updateNav();
     }
     followInZoom();
-    if (piece == nullptr || piece->notation == nullptr)
+    if (view == View::continuous && std::abs (lineXTarget - lineX) > 0.3)
     {
-        const bool busy = proc.isLoading() || proc.isEngraving();
+        // the line glides along with the music
+        lineX += (lineXTarget - lineX) * (1.0 - std::exp (-dt * 5.0));
+        repaint (viewArea().expanded (8.0f).toNearestInt());
+        updateNav();
+    }
+    auto shown = shownNotation();
+    if (shown == nullptr)
+    {
+        const bool busy = proc.isLoading() || proc.isEngraving() || proc.isEngravingContinuous();
         if (busy != wasBusy)
             repaint();
         wasBusy = busy;
         return;
     }
-    auto& tm = piece->notation->getTimemap();
+    auto& tm = shown->getTimemap();
     const double beat = proc.isPlaying() || proc.getPosition() > 0 ? proc.getCurrentBeat() : -1.0;
     if (std::abs (beat - lastBeat) < 1.0e-6)
         return;
@@ -618,7 +866,18 @@ void MusicDesk::update (double dt)
     active = std::move (now);
 
     changed = false; // note areas were repainted individually by setHighlight
-    if (follow && newest.isNotEmpty())
+    if (follow && newest.isNotEmpty() && view == View::continuous && line != nullptr)
+    {
+        // keep the playing notes about a third into the view
+        if (auto it = line->ids.find (newest); it != line->ids.end())
+        {
+            const auto va = viewArea();
+            const double x = elementArea (*line, it->second, lineRect()).getCentreX() - va.getX() + lineX;
+            lineXTarget = juce::jlimit (0.0, maxLineX(), x - va.getWidth() * 0.3);
+        }
+        return;
+    }
+    if (follow && newest.isNotEmpty() && piece->notation != nullptr)
     {
         const int page = piece->notation->pageOfElement (newest);
         const int n = visiblePages();
@@ -695,6 +954,21 @@ std::unique_ptr<juce::AccessibilityHandler> MusicDesk::createAccessibilityHandle
 
 void MusicDesk::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
 {
+    if (view == View::continuous)
+    {
+        // sideways (or the wheel turned): the line moves left and right
+        const float d = std::abs (w.deltaX) > std::abs (w.deltaY) ? w.deltaX : w.deltaY;
+        if (std::abs (d) < 1.0e-4)
+            return;
+        stopFollowing();
+        const double base = w.isSmooth ? lineX : lineXTarget;
+        lineXTarget = juce::jlimit (0.0, maxLineX(), base - d * (w.isSmooth ? 600.0 : 420.0));
+        if (w.isSmooth)
+            lineX = lineXTarget;
+        repaint();
+        updateNav();
+        return;
+    }
     if (std::abs (w.deltaY) < 1.0e-4)
         return;
     if (zoomed)
@@ -734,6 +1008,32 @@ void MusicDesk::mouseDown (const juce::MouseEvent& e)
         return;
     }
     // click on a note: continue playback from there
+    if (view == View::continuous && line != nullptr && piece != nullptr && piece->score != nullptr)
+    {
+        const auto r = lineRect();
+        double bestDist = 1.0e9;
+        juce::String best;
+        for (auto& [id, d] : line->ids)
+        {
+            if (! noteBeat.count (id))
+                continue;
+            auto area = elementArea (*line, d, r);
+            const double dist = area.getCentre().getDistanceFrom (e.position);
+            if (area.expanded (6.0f).contains (e.position) && dist < bestDist)
+            {
+                bestDist = dist;
+                best = id;
+            }
+        }
+        if (best.isNotEmpty())
+        {
+            proc.seek (piece->score->beatToSeconds (noteBeat[best]));
+            lastBeat = -1;
+            follow = true;
+            followButton.setToggleState (true, juce::dontSendNotification);
+        }
+        return;
+    }
     if (piece == nullptr || piece->notation == nullptr || piece->score == nullptr)
         return;
     for (int index : shownPages())

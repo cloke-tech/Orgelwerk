@@ -11,6 +11,7 @@ struct Piece
 {
     std::shared_ptr<Score> score;
     std::shared_ptr<Notation> notation;
+    std::shared_ptr<Notation> continuous; // the piece on one long line (made when the view asks for it)
     juce::File source;
     bool notationFromScore = false; // engraved from the notes (MIDI) rather than read from a notation file
     juce::String warning;
@@ -47,6 +48,10 @@ namespace Formats
     // Re-engraves a MIDI-based piece, e.g. after parts were moved to other divisions.
     std::shared_ptr<Notation> engrave (const Score& score, const std::vector<bool>& partIsPedal, const std::vector<int>& partDivision,
                                        juce::String& error, const OrganInfo& organ = {});
+    // The piece on one long line for the continuous view: MIDI-based pieces are engraved
+    // again (on the classic three staves), notation files are laid out again from their data.
+    std::shared_ptr<Notation> engraveContinuous (const Piece& piece, const std::vector<bool>& partIsPedal,
+                                                 const std::vector<int>& partDivision, juce::String& error, const OrganInfo& organ = {});
 
     // Export
     struct ExportFormat

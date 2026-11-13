@@ -183,8 +183,139 @@ static RegStop presetForPart (const NotationBuilder::PartInfo& part, const Expor
     return { 0, 0, 0 };
 }
 
-// Writes the SoundFont and the presets into the .mscz (its audiosettings.json), part by part.
-static bool assignMuseScoreSound (const juce::File& mscz, const ExportContext& ctx, const Score& score)
+// MuseScore plays one SoundFont preset per part, so a registration with several stops and
+// its changes are rebuilt from hidden parts, one per stop a division uses: it holds that
+// division's notes exactly while the stop is drawn (an octave stop moved by its octave).
+// The visible parts are muted, as long as all their divisions are played by such layers.
+struct MuseScoreLayers
+{
+    Score score;                       // the piece plus one part per (division, stop)
+    std::vector<int> partDivision;     // the layers get divisions of their own, after the real ones
+    std::vector<bool> partIsPedal;
+    std::vector<juce::String> divisionNames;
+    std::set<int> layerDivisions;
+    std::map<int, RegStop> stopOfLayer; // layer division -> its stop
+    std::set<int> realWithLayers;      // real divisions whose sound comes from layers
+};
+
+static MuseScoreLayers museScoreLayers (const Score& score, const ExportContext& ctx, const SoundFont& sf)
+{
+    MuseScoreLayers L;
+    L.score = score;
+    L.partDivision = ctx.partDivision;
+    L.partIsPedal = ctx.partIsPedal;
+    L.partDivision.resize (score.parts.size(), -1);
+    L.partIsPedal.resize (score.parts.size(), false);
+    int numDivisions = 0;
+    for (int d : L.partDivision)
+        numDivisions = juce::jmax (numDivisions, d + 1);
+    if (ctx.liveOrgan != nullptr)
+        numDivisions = juce::jmax (numDivisions, ctx.liveOrgan->getNumDivisions());
+    L.divisionNames.resize ((size_t) numDivisions);
+    if (ctx.liveOrgan != nullptr)
+    {
+        const juce::ScopedLock sl (ctx.liveOrgan->getLock());
+        for (int d = 0; d < ctx.liveOrgan->getNumDivisions(); ++d)
+            L.divisionNames[(size_t) d] = ctx.liveOrgan->getDivision (d).name;
+    }
+    std::set<int> used;
+    for (auto& n : score.notes)
+        if (n.part >= 0 && n.part < (int) L.partDivision.size() && L.partDivision[(size_t) n.part] >= 0
+            && ! score.parts[(size_t) n.part].drums)
+            used.insert (L.partDivision[(size_t) n.part]);
+
+    int nextDivision = numDivisions;
+    for (int d : used)
+    {
+        // the division's registration over time: (from beat, stops)
+        std::vector<std::pair<double, Registration>> timeline;
+        for (auto& e : ctx.registrationTimeline)
+            if (e.division == d)
+                timeline.push_back ({ e.beat, e.registration });
+        if (timeline.empty() && ctx.liveOrgan != nullptr)
+        {
+            Registration drawn;
+            const juce::ScopedLock sl (ctx.liveOrgan->getLock());
+            if (d < ctx.liveOrgan->getNumDivisions())
+                for (auto& st : ctx.liveOrgan->getDivision (d).stops)
+                    if (st.on)
+                        drawn.push_back ({ st.bank, st.program, st.octave });
+            if (! drawn.empty())
+                timeline.push_back ({ 0.0, drawn });
+        }
+        if (timeline.empty())
+            continue;
+        timeline.front().first = -1.0e9; // the first registration holds from the start
+        std::vector<RegStop> stops;
+        for (auto& [b, reg] : timeline)
+            for (auto rs : reg)
+                if (std::find (stops.begin(), stops.end(), rs) == stops.end())
+                    stops.push_back (rs);
+        const auto abbr = NotationBuilder::divisionAbbreviation (d < (int) L.divisionNames.size() ? L.divisionNames[(size_t) d] : juce::String(),
+                                                                 d, d < (int) L.partDivision.size() && false);
+        for (auto rs : stops)
+        {
+            const int layer = nextDivision++;
+            const int partIndex = (int) L.score.parts.size();
+            ScorePart part;
+            part.name = abbr + " " + sf.presetName (rs.bank, rs.program);
+            L.score.parts.push_back (part);
+            L.partDivision.push_back (layer);
+            L.partIsPedal.push_back (false);
+            L.divisionNames.resize ((size_t) layer + 1);
+            L.divisionNames[(size_t) layer] = part.name;
+            L.layerDivisions.insert (layer);
+            L.stopOfLayer[layer] = rs;
+            // the stretches of time with this stop drawn
+            std::vector<std::pair<double, double>> on;
+            for (size_t k = 0; k < timeline.size(); ++k)
+                if (std::find (timeline[k].second.begin(), timeline[k].second.end(), rs) != timeline[k].second.end())
+                    on.push_back ({ timeline[k].first, k + 1 < timeline.size() ? timeline[k + 1].first : 1.0e18 });
+            for (auto& n : score.notes)
+            {
+                if (n.part < 0 || n.part >= (int) ctx.partDivision.size() || ctx.partDivision[(size_t) n.part] != d)
+                    continue;
+                for (auto& [a, b] : on)
+                {
+                    const double s0 = juce::jmax (a, n.start), e0 = juce::jmin (b, n.start + n.length);
+                    const int key = n.key + 12 * rs.octave;
+                    if (e0 - s0 < 1.0e-3 || key < 0 || key > 127)
+                        continue;
+                    ScoreNote copy = n;
+                    copy.start = s0;
+                    copy.length = e0 - s0;
+                    copy.key = key;
+                    copy.part = partIndex;
+                    L.score.notes.push_back (copy);
+                }
+            }
+        }
+        L.realWithLayers.insert (d);
+    }
+    L.score.finalise();
+    return L;
+}
+
+// the score options for MuseScore: the layers are parts of their own (hidden later)
+static NotationBuilder::Options museScoreOptions (const ExportContext& ctx, const MuseScoreLayers& layers)
+{
+    auto o = builderOptions (ctx);
+    o.partDivision = layers.partDivision;
+    o.partIsPedal = layers.partIsPedal;
+    for (size_t d = 0; d < layers.divisionNames.size(); ++d)
+        if (d >= o.divisionNames.size() || o.divisionNames[d].isEmpty())
+        {
+            o.divisionNames.resize (juce::jmax (o.divisionNames.size(), d + 1));
+            o.divisionNames[d] = layers.divisionNames[d];
+        }
+    o.divisionIsPedal.resize (o.divisionNames.size(), false);
+    o.ownPartDivisions = layers.layerDivisions;
+    return o;
+}
+
+// Writes the SoundFont and the presets into the .mscz (its audiosettings.json), part by part,
+// hides the layer parts and lets MuseScore leave out empty staves like Orgelwerk does.
+static bool assignMuseScoreSound (const juce::File& mscz, const ExportContext& ctx, const Score& score, const MuseScoreLayers& layers)
 {
     auto sf = ctx.liveOrgan != nullptr ? ctx.liveOrgan->getSoundFont() : SoundFont::loadBuiltIn();
     if (sf == nullptr)
@@ -192,7 +323,7 @@ static bool assignMuseScoreSound (const juce::File& mscz, const ExportContext& c
     const auto sfName = soundFontForMuseScore (*sf);
     if (sfName.isEmpty())
         return false;
-    const auto layout = NotationBuilder::partLayout (score, builderOptions (ctx));
+    const auto layout = NotationBuilder::partLayout (layers.score, museScoreOptions (ctx, layers));
 
     juce::MemoryBlock zipData;
     if (! mscz.loadFileAsData (zipData))
@@ -202,6 +333,7 @@ static bool assignMuseScoreSound (const juce::File& mscz, const ExportContext& c
     // the parts in the score file, in order: (part id, instrument id)
     std::vector<std::pair<juce::String, juce::String>> parts;
     juce::var settings;
+    juce::String scoreName, scoreText;
     for (int i = 0; i < zip.getNumEntries(); ++i)
     {
         auto* entry = zip.getEntry (i);
@@ -209,7 +341,9 @@ static bool assignMuseScoreSound (const juce::File& mscz, const ExportContext& c
         if (in == nullptr)
             continue;
         if (entry->filename.endsWithIgnoreCase (".mscx") && ! entry->filename.containsChar ('/'))
-            if (auto xml = juce::parseXML (in->readEntireStreamAsString()))
+            scoreName = entry->filename, scoreText = in->readEntireStreamAsString();
+        if (entry->filename == scoreName && scoreText.isNotEmpty())
+            if (auto xml = juce::parseXML (scoreText))
                 if (auto* sc = xml->getChildByName ("Score"))
                     for (auto* part : sc->getChildWithTagNameIterator ("Part"))
                         if (auto* inst = part->getChildByName ("Instrument"))
@@ -222,9 +356,26 @@ static bool assignMuseScoreSound (const juce::File& mscz, const ExportContext& c
     if (! settings.isObject())
         settings = juce::var (new juce::DynamicObject());
     juce::Array<juce::var> tracks;
+    std::set<juce::String> hiddenParts;
     for (size_t i = 0; i < parts.size(); ++i)
     {
-        const auto rs = i < layout.size() ? presetForPart (layout[i], ctx, score, *sf) : RegStop { 0, 0, 0 };
+        // a hidden layer plays its stop; a visible part keeps a preset but is muted when layers play it
+        const bool isLayer = i < layout.size() && layers.layerDivisions.count (layout[i].division) > 0;
+        bool muted = false;
+        if (i < layout.size() && ! isLayer)
+        {
+            muted = true;
+            for (auto& n : score.notes)
+                if (n.part >= 0 && n.part < (int) ctx.partDivision.size() && n.part < (int) ctx.partIsPedal.size()
+                    && ctx.partIsPedal[(size_t) n.part] == layout[i].pedal
+                    && (layout[i].division < 0 || ctx.partDivision[(size_t) n.part] == layout[i].division)
+                    && ctx.partDivision[(size_t) n.part] >= 0 && ! layers.realWithLayers.count (ctx.partDivision[(size_t) n.part]))
+                    muted = false;
+        }
+        const auto rs = isLayer ? layers.stopOfLayer.at (layout[i].division)
+                                : (i < layout.size() ? presetForPart (layout[i], ctx, score, *sf) : RegStop { 0, 0, 0 });
+        if (isLayer)
+            hiddenParts.insert (parts[i].first);
         auto* attributes = new juce::DynamicObject();
         attributes->setProperty ("playbackSetupData", "keyboards.organ.pipe");
         attributes->setProperty ("soundFontName", sfName);
@@ -246,7 +397,7 @@ static bool assignMuseScoreSound (const juce::File& mscz, const ExportContext& c
         output->setProperty ("fxChain", juce::var (new juce::DynamicObject()));
         output->setProperty ("volumeDb", 0);
         auto* soloMute = new juce::DynamicObject();
-        soloMute->setProperty ("mute", false);
+        soloMute->setProperty ("mute", muted);
         soloMute->setProperty ("solo", false);
         auto* track = new juce::DynamicObject();
         track->setProperty ("in", juce::var (input));
@@ -260,11 +411,34 @@ static bool assignMuseScoreSound (const juce::File& mscz, const ExportContext& c
 
     // the same archive with the new audiosettings.json
     juce::ZipFile::Builder builder;
+    // the score file: layer parts hidden, empty staves left out (with a staff per manual)
+    for (auto& id : hiddenParts)
+    {
+        const auto tag = "<Part id=\"" + id + "\">";
+        const int at = scoreText.indexOf (tag);
+        if (at >= 0)
+            scoreText = scoreText.replaceSection (at + tag.length(), 0, "\n      <show>0</show>");
+    }
+    if (ctx.staffPerManual)
+    {
+        const juce::String style = "<hideEmptyStaves>1</hideEmptyStaves><dontHideStavesInFirstSystem>0</dontHideStavesInFirstSystem>";
+        const int styleAt = scoreText.indexOf ("<Style>");
+        const int scoreAt = scoreText.indexOf ("<Score>");
+        if (styleAt >= 0)
+            scoreText = scoreText.replaceSection (styleAt + 7, 0, style);
+        else if (scoreAt >= 0)
+            scoreText = scoreText.replaceSection (scoreAt + 7, 0, "<Style>" + style + "</Style>");
+    }
     for (int i = 0; i < zip.getNumEntries(); ++i)
     {
         auto* entry = zip.getEntry (i);
         if (entry->filename == "audiosettings.json")
             continue;
+        if (entry->filename == scoreName && scoreText.isNotEmpty())
+        {
+            builder.addEntry (new juce::MemoryInputStream (scoreText.toRawUTF8(), scoreText.getNumBytesAsUTF8(), true), 9, entry->filename, entry->fileTime);
+            continue;
+        }
         std::unique_ptr<juce::InputStream> in (zip.createStreamForEntry (i));
         if (in == nullptr)
             continue;
@@ -333,6 +507,40 @@ std::shared_ptr<Notation> engrave (const Score& score, const std::vector<bool>& 
     auto n = std::make_shared<Notation>();
     n->setHideEmptyStaves (opt.staffPerManual);
     if (! n->loadData (xml, "musicxml", error))
+        return {};
+    return n;
+}
+
+std::shared_ptr<Notation> engraveContinuous (const Piece& piece, const std::vector<bool>& partIsPedal,
+                                             const std::vector<int>& partDivision, juce::String& error, const OrganInfo& organ)
+{
+    juce::String data, format;
+    if (piece.notationFromScore && piece.score != nullptr)
+    {
+        NotationBuilder::Options opt;
+        opt.partIsPedal = partIsPedal;
+        opt.partDivision = partDivision;
+        applyOrganInfo (opt, organ);
+        opt.staffPerManual = false; // one line can not leave out staves: the classic three
+        data = NotationBuilder::toMusicXML (*piece.score, opt);
+        format = "musicxml";
+    }
+    else if (piece.notation != nullptr && piece.notation->getSourceData().isNotEmpty())
+    {
+        data = piece.notation->getSourceData();
+        format = piece.notation->getSourceFormat();
+    }
+    else if (piece.source.existsAsFile())
+    {
+        auto n = std::make_shared<Notation>();
+        n->setContinuous (true);
+        return n->loadFile (piece.source, error) ? n : nullptr;
+    }
+    if (data.isEmpty())
+        return {};
+    auto n = std::make_shared<Notation>();
+    n->setContinuous (true);
+    if (! n->loadData (data, format, error))
         return {};
     return n;
 }
@@ -742,17 +950,22 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
     }
     if (fmt.id == "mscz")
     {
+        // the score with hidden layer parts that play the registration (see museScoreLayers)
+        auto sf = ctx.liveOrgan != nullptr ? ctx.liveOrgan->getSoundFont() : SoundFont::loadBuiltIn();
+        const auto layers = museScoreLayers (score, ctx, *sf);
         juce::TemporaryFile temp (".musicxml");
-        if (! temp.getFile().replaceWithText (NotationBuilder::toMusicXML (score, builderOptions (ctx))))
+        if (! temp.getFile().replaceWithText (NotationBuilder::toMusicXML (layers.score, museScoreOptions (ctx, layers))))
         {
             error = tr ("Zwischendatei konnte nicht geschrieben werden.");
             return false;
         }
+        if (std::getenv ("ORGEL_KEEP_MUSESCORE_XML") != nullptr)
+            temp.getFile().copyFileTo (target.withFileExtension ("musicxml"));
         target.deleteFile();
         if (! runMuseScore (temp.getFile(), target, error))
             return false;
         // the organ's SoundFont and stops for MuseScore's playback (the score is fine without)
-        assignMuseScoreSound (target, ctx, score);
+        assignMuseScoreSound (target, ctx, score, layers);
         return true;
     }
     if (fmt.isAudio)

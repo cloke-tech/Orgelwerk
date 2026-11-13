@@ -33,6 +33,12 @@ public:
     // false: every staff in every line (the classic organ layout). Set before loading.
     // (not called: Verovio's own choice, for notation files)
     void setHideEmptyStaves (bool hide) { hideEmptyStaves = hide ? 1 : 0; }
+    // true: the whole piece on one line, as wide as it needs (a continuous view). Set before loading.
+    void setContinuous (bool c) { continuous = c; }
+    bool isContinuous() const { return continuous; }
+    // what the notes were loaded from (empty for compressed MusicXML)
+    juce::String getSourceData() const { return lastData; }
+    juce::String getSourceFormat() const { return lastFormat; }
 
     int getPageCount() const { return (int) pages.size(); }
     juce::String getPageSVG (int page) const; // 0-based, preprocessed for JUCE
@@ -69,6 +75,7 @@ private:
     juce::String title;
     int pageWidth = 2100, pageHeight = 2970, scale = 40;
     int hideEmptyStaves = -1;
+    bool continuous = false;
     juce::String lastData, lastFormat;
     mutable std::recursive_mutex mutex;
 };

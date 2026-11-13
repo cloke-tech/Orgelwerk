@@ -144,10 +144,13 @@ void Notation::applyOptions()
     opts->setProperty ("pageWidth", pageWidth);
     opts->setProperty ("pageHeight", pageHeight);
     opts->setProperty ("scale", scale);
-    opts->setProperty ("adjustPageHeight", false);
+    opts->setProperty ("adjustPageHeight", continuous);
     opts->setProperty ("footer", "none");
-    opts->setProperty ("header", "auto");
-    opts->setProperty ("breaks", "smart");
+    opts->setProperty ("header", continuous ? "none" : "auto");
+    // continuous: no line breaks, the page as wide as the piece
+    opts->setProperty ("breaks", continuous ? "none" : "smart");
+    if (continuous)
+        opts->setProperty ("adjustPageWidth", true);
     opts->setProperty ("justifyVertically", true);
     opts->setProperty ("spacingStaff", 10);
     opts->setProperty ("spacingSystem", 14);
@@ -160,10 +163,11 @@ void Notation::applyOptions()
         // files change tempo in almost every bar)
         opts->setProperty ("condenseTempoPages", false);
     }
-    opts->setProperty ("pageMarginLeft", 80);
-    opts->setProperty ("pageMarginRight", 80);
-    opts->setProperty ("pageMarginTop", 80);
-    opts->setProperty ("pageMarginBottom", 80);
+    const int margin = continuous ? 30 : 80;
+    opts->setProperty ("pageMarginLeft", margin);
+    opts->setProperty ("pageMarginRight", margin);
+    opts->setProperty ("pageMarginTop", margin);
+    opts->setProperty ("pageMarginBottom", margin);
     t.SetOptions (juce::JSON::toString (juce::var (opts.get()), true).toStdString());
 }
 

@@ -482,6 +482,44 @@ void OrgelProcessor::requestEngraving()
     reengrave (true);
 }
 
+void OrgelProcessor::requestContinuous()
+{
+    auto p = getPiece();
+    if (p == nullptr || p->continuous != nullptr || engravingContinuous.exchange (true))
+        return;
+    sendChangeMessage();
+    auto pedal = partIsPedal();
+    auto map = partDivision;
+    std::vector<DivisionRegistration> reg;
+    if (applyFileRegistration)
+    {
+        const juce::ScopedLock sl (organ.getLock());
+        reg = timeline;
+    }
+    auto info = Formats::OrganInfo::from (organ, std::move (reg));
+    info.colourManuals = colourManuals;
+    std::weak_ptr<int> token = alive;
+    pool.addJob ([this, p, pedal, map, info, token] {
+        juce::String error;
+        auto n = Formats::engraveContinuous (*p, pedal, map, error, info);
+        juce::MessageManager::callAsync ([this, p, n, token] {
+            if (token.expired())
+                return;
+            engravingContinuous = false;
+            const juce::ScopedLock sl (pieceLock);
+            if (piece == nullptr || piece->score != p->score || n == nullptr)
+            {
+                sendChangeMessage();
+                return;
+            }
+            auto copy = std::make_shared<Piece> (*piece);
+            copy->continuous = n;
+            piece = copy;
+            sendChangeMessage();
+        });
+    });
+}
+
 void OrgelProcessor::reengrave (bool evenIfNotShown)
 {
     auto p = getPiece();
@@ -522,13 +560,15 @@ void OrgelProcessor::reengrave (bool evenIfNotShown)
                 return;
             }
             const juce::ScopedLock sl (pieceLock);
-            if (piece != p)
+            // the same piece (it may have got its continuous line meanwhile)
+            if (piece == nullptr || piece->score != p->score)
             {
                 sendChangeMessage();
                 return;
             }
-            auto copy = std::make_shared<Piece> (*p);
+            auto copy = std::make_shared<Piece> (*piece);
             copy->notation = n;
+            copy->continuous = nullptr; // set again when the continuous view asks for it
             piece = copy;
             sendChangeMessage();
         });

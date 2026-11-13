@@ -20,8 +20,14 @@ public:
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override;
     void showPage (int first);
     std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
-    bool isZoomed() const { return zoomed; }
-    void setZoomed (bool z) { zoomButton.setToggleState (z, juce::sendNotification); }
+    // whole pages side by side, pages one below the other at page width, or the piece on one
+    // long line that scrolls from left to right
+    enum class View { pages, pageWidth, continuous };
+    View getView() const { return view; }
+    void setView (View v);
+    static juce::String viewName (View v);
+    bool isZoomed() const { return view == View::pageWidth; }
+    void setZoomed (bool z) { setView (z ? View::pageWidth : View::pages); }
     bool isFollowing() const { return follow; }
     void setFollowing (bool f) { followButton.setToggleState (f, juce::sendNotification); }
 
@@ -67,7 +73,26 @@ private:
     void setHighlight (const juce::String& id, bool on);
     juce::Rectangle<float> viewArea() const;
     static juce::Rectangle<float> elementArea (Page& page, juce::Drawable* d, juce::Rectangle<float> slot);
-    bool zoomed = false;
+    bool zoomed = false; // page width
+    View view = View::pages;
+
+    // the continuous view: one long line, drawn in tiles in the background
+    std::shared_ptr<Notation> lineNotation;      // what is shown (piece->continuous)
+    std::unique_ptr<Page> line;                  // its drawing and notes, for highlights and clicks
+    std::shared_ptr<juce::Drawable> tileDrawable; // a second copy, only drawn on the background thread
+    std::map<int, juce::Image> tiles;
+    std::set<int> tilesPending;
+    juce::String tileKey;
+    int lineGeneration = 0;
+    double lineX = 0, lineXTarget = 0; // how far the line is scrolled to the left (pixels)
+    static constexpr float tileWidth = 1024.0f;
+    std::shared_ptr<Notation> shownNotation() const;
+    void prepareLine();
+    void resetFollowState();
+    juce::Rectangle<float> lineRect() const;
+    double maxLineX() const;
+    void paintLine (juce::Graphics& g);
+    void requestTile (int index, float physicalScale);
     double scroll = 0.0; // page width: pages scrolled past the top of the view (fractional)
     double scrollTarget = 0.0; // scroll glides towards this
     // page turn: the new pages slide in over the old ones

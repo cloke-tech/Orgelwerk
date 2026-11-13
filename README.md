@@ -20,8 +20,9 @@ SF2-SoundFont (eingebaut: **Jeux14**), die Noten stehen auf dem Notenpult in der
   Plugin der DAW-Eingang), Kanal (Omni oder 1–16), **MIDI lernen**, Lautstärke, Manual
   entfernen. CC 7/11 wirkt als Schwellpedal. Voreinstellung: Manual I = Kanal 1,
   II = 2, III = 3, Pedal = 4.
-- **Notenpult**: zeigt die Partitur (1 oder 2 Seiten, „Seitenbreite“ rollt die Seiten
-  durchgehend und hält die gespielte Zeile ganz im Bild), markiert beim Abspielen die
+- **Notenpult**: zeigt die Partitur als ganze Seiten (1 oder 2), in „Seitenbreite“ (die Seiten
+  rollen durchgehend, die gespielte Zeile bleibt ganz im Bild) oder „Fortlaufend“ (das Stück auf
+  einer langen Zeile, die beim Spielen von links nach rechts mitgleitet), markiert beim Abspielen die
   klingenden Noten, blättert mit, Klick auf eine Note springt dorthin. Leertaste =
   Start/Pause, Pfeiltasten = ±5 s.
 - **Notenbild wie Orgelausgaben**: eigene Systeme je Manual und Pedal (leere werden pro Zeile
@@ -68,7 +69,7 @@ der Sprache des Systems (sonst Englisch); unter **Ansicht → Sprache** lässt s
 | Humdrum **kern (.krn .hum) | Humdrum **kern |
 | Plaine & Easie, GABC, MuseData, EsAC, CMME | LilyPond (.ly) |
 | über MuseScore (falls installiert): .mscz .mscx, Guitar Pro, Capella, Overture, PowerTab, Bagpipe, Band-in-a-Box | PDF, SVG, PNG (Notenseiten) |
-| | MuseScore .mscz (über MuseScore) |
+| | MuseScore .mscz (über MuseScore, mit Orgelklang: jedes Register als ausgeblendete Stimme, die der Registrierung folgt) |
 | | **Audio über die SF2**: WAV, AIFF, FLAC, Ogg Vorbis |
 
 MIDI-Dateien werden für das Notenbild quantisiert (Takte, Stimmen, Haltebögen, Vorzeichen,
