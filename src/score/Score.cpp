@@ -428,17 +428,57 @@ namespace ScoreIO
                 order.push_back (&s);
 
         // Same rhythm and same notes, or the same line an octave or two away (a stop that
-        // should sound at 16' or 4' pitch, played transposed on its own channel).
+        // should sound at 16' or 4' pitch, played transposed on its own channel). Files are not
+        // always exact about it (a stop moved an octave for a few bars, a note missing): two
+        // channels count as one line when nearly all notes of each have a partner in the other
+        // at the same time, and one octave distance clearly dominates.
         auto offsetBetween = [] (const Stream& a, const Stream& b) -> int {
-            if (a.notes.size() != b.notes.size() || a.notes.empty())
+            if (a.notes.empty() || b.notes.empty())
                 return 99;
-            const int k = b.notes.front().key - a.notes.front().key;
-            if (k % 12 != 0 || std::abs (k) > 24)
+            const size_t na = a.notes.size(), nb = b.notes.size();
+            if (std::abs ((double) na - (double) nb) > 0.03 * (double) juce::jmax (na, nb))
                 return 99;
-            for (size_t i = 0; i < a.notes.size(); ++i)
-                if (std::abs (a.notes[i].start - b.notes[i].start) > 1.0e-6 || b.notes[i].key - a.notes[i].key != k)
-                    return 99;
-            return k;
+            auto slot = [] (double t) { return (long long) std::llround (t * 64.0); };
+            std::map<long long, std::vector<int>> keysA, keysB;
+            for (auto& n : a.notes)
+                keysA[slot (n.start)].push_back (n.key);
+            for (auto& n : b.notes)
+                keysB[slot (n.start)].push_back (n.key);
+            std::map<int, int> offsetCount;
+            int matchedA = 0, matchedB = 0;
+            auto partner = [] (const std::map<long long, std::vector<int>>& keys, long long t, int key, int* offsetFound) {
+                for (long long dt : { 0LL, -1LL, 1LL })
+                    if (auto it = keys.find (t + dt); it != keys.end())
+                        for (int k : { 0, 12, -12, 24, -24 })
+                            if (std::find (it->second.begin(), it->second.end(), key + k) != it->second.end())
+                            {
+                                if (offsetFound != nullptr)
+                                    *offsetFound = k;
+                                return true;
+                            }
+                return false;
+            };
+            for (auto& n : a.notes)
+            {
+                int k = 0;
+                if (partner (keysB, slot (n.start), n.key, &k))
+                {
+                    ++matchedA;
+                    ++offsetCount[k];
+                }
+            }
+            for (auto& n : b.notes)
+                matchedB += partner (keysA, slot (n.start), n.key, nullptr) ? 1 : 0;
+            if (matchedA < 0.97 * (double) na || matchedB < 0.97 * (double) nb)
+                return 99;
+            int best = 0, bestCount = -1;
+            for (auto& [k, c] : offsetCount)
+                if (c > bestCount)
+                {
+                    best = k;
+                    bestCount = c;
+                }
+            return bestCount >= 0.9 * matchedA ? best : 99;
         };
         for (auto* s : order)
             std::sort (s->notes.begin(), s->notes.end(), [] (auto& a, auto& b) {
@@ -510,10 +550,14 @@ namespace ScoreIO
                     written = w;
                 }
             }
-            size_t ref = 0;
+            // the channel that carries the line: at the written pitch, with the most notes
+            // (when the doubling is not exact, the fullest copy is the line)
+            size_t ref = group.size();
             for (size_t g = 0; g < group.size(); ++g)
-                if (offsets[g] == written)
+                if (offsets[g] == written && (ref == group.size() || group[g]->notes.size() > group[ref]->notes.size()))
                     ref = g;
+            if (ref == group.size())
+                ref = 0;
             const int lift = written - offsets[ref];
             auto octaveOf = [&] (size_t g) { return (offsets[g] - written) / 12; };
 
