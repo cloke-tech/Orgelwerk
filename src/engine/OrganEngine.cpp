@@ -1,4 +1,5 @@
 #include "OrganEngine.h"
+#include "I18n.h"
 #include "tsf.h"
 
 namespace orgel
@@ -386,12 +387,12 @@ static juce::String defaultManualName (int n)
 {
     switch (n)
     {
-        case 1: return "Hauptwerk";
-        case 2: return "Positiv";
-        case 3: return "Schwellwerk";
-        case 4: return "Solowerk";
-        case 5: return "Fernwerk";
-        default: return "Manual " + romanNumeral (n);
+        case 1: return tr ("Hauptwerk");
+        case 2: return tr ("Positiv");
+        case 3: return tr ("Schwellwerk");
+        case 4: return tr ("Solowerk");
+        case 5: return tr ("Fernwerk");
+        default: return tr ("Manual ") + romanNumeral (n);
     }
 }
 
@@ -424,7 +425,7 @@ void OrganEngine::setDefaultDisposition()
             divisions.push_back (d);
         }
         Division ped;
-        ped.name = "Pedal";
+        ped.name = tr ("Pedal");
         ped.pedal = true;
         ped.midi.channel = 4;
         divisions.push_back (ped);
@@ -560,10 +561,10 @@ static juce::String octaveSuffix (int octave)
 {
     switch (octave)
     {
-        case -2: return juce::String::fromUTF8 (" (2 Okt. tiefer)");
-        case -1: return " (Suboktave)";
-        case 1: return " (Superoktave)";
-        case 2: return juce::String::fromUTF8 (" (2 Okt. höher)");
+        case -2: return tr (" (2 Okt. tiefer)");
+        case -1: return tr (" (Suboktave)");
+        case 1: return tr (" (Superoktave)");
+        case 2: return tr (" (2 Okt. höher)");
         default: return {};
     }
 }
@@ -1298,7 +1299,7 @@ void OrganEngine::fromXml (const juce::XmlElement& xml)
         if (pedalIndex() < 0)
         {
             Division ped;
-            ped.name = "Pedal";
+            ped.name = tr ("Pedal");
             ped.pedal = true;
             divisions.push_back (ped);
         }

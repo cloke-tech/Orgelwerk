@@ -1,4 +1,5 @@
 #include "Notation.h"
+#include "../engine/I18n.h"
 #include "BinaryData.h"
 
 #include "toolkit.h"
@@ -85,7 +86,7 @@ bool Notation::loadFile (const juce::File& file, juce::String& error)
     juce::MemoryBlock mb;
     if (! file.loadFileAsData (mb))
     {
-        error = "Datei kann nicht gelesen werden: " + file.getFullPathName();
+        error = tr ("Datei kann nicht gelesen werden: ") + file.getFullPathName();
         return false;
     }
     auto* bytes = static_cast<const unsigned char*> (mb.getData());
@@ -98,7 +99,7 @@ bool Notation::loadFile (const juce::File& file, juce::String& error)
         t.SetInputFrom ("musicxml");
         if (! t.LoadZipDataBuffer (bytes, (int) mb.getSize()))
         {
-            error = "Komprimierte MusicXML-Datei konnte nicht gelesen werden.";
+            error = tr ("Komprimierte MusicXML-Datei konnte nicht gelesen werden.");
             return false;
         }
         lastData = {};
@@ -124,7 +125,7 @@ bool Notation::loadData (const juce::String& data, const juce::String& format, j
         t.SetInputFrom (format.isEmpty() ? "auto" : format.toStdString());
         if (! t.LoadData (data.toStdString()))
         {
-            error = "Die Noten konnten nicht gelesen werden (" + format + ").";
+            error = tr ("Die Noten konnten nicht gelesen werden") + " (" + format + ").";
             pages.clear();
             return false;
         }

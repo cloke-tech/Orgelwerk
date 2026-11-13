@@ -14,14 +14,14 @@ MusicDesk::MusicDesk (OrgelProcessor& p) : proc (p)
     followButton.setColour (juce::ToggleButton::textColourId, theme::text);
     followButton.setColour (juce::ToggleButton::tickColourId, theme::gold);
     pageLabel.setJustificationType (juce::Justification::centred);
-    zoomButton.setButtonText ("Seitenbreite");
-    zoomButton.setTooltip ("Zwischen ganzer Seite und Seitenbreite (größere Noten, scrollt mit) umschalten");
+    zoomButton.setButtonText (tr ("Seitenbreite"));
+    zoomButton.setTooltip (tr ("Zwischen ganzer Seite und Seitenbreite (größere Noten, scrollt mit) umschalten"));
     zoomButton.setClickingTogglesState (true);
     zoomButton.onClick = [this] {
         // stay at the same page when switching
         const int page = currentPage();
         zoomed = zoomButton.getToggleState();
-        zoomButton.setButtonText (zoomed ? "Ganze Seite" : "Seitenbreite");
+        zoomButton.setButtonText (zoomed ? tr ("Ganze Seite") : tr ("Seitenbreite"));
         turnFrom = -1;
         if (zoomed)
             scroll = scrollTarget = page;
@@ -33,8 +33,8 @@ MusicDesk::MusicDesk (OrgelProcessor& p) : proc (p)
     pageLabel.setColour (juce::Label::textColourId, theme::text);
     for (auto* c : std::initializer_list<juce::Component*> { &prev, &next, &zoomButton, &followButton, &pageLabel })
         addAndMakeVisible (c);
-    prev.setTooltip (juce::String::fromUTF8 ("Zurückblättern"));
-    next.setTooltip (juce::String::fromUTF8 ("Weiterblättern"));
+    prev.setTooltip (tr ("Zurückblättern"));
+    next.setTooltip (tr ("Weiterblättern"));
     updateNav();
 }
 
@@ -64,9 +64,9 @@ void MusicDesk::setPiece (std::shared_ptr<Piece> p)
                     noteBeat[id] = e.qstamp;
     tallestLine = 0.0f;
     measureLines();
-    status = piece == nullptr ? juce::String (juce::String::fromUTF8 ("Noten hierher ziehen oder über „Öffnen“ laden"))
-                              : (piece->notation == nullptr ? (piece->notationFromScore ? juce::String ("Klicken, um die Noten zu setzen")
-                                                                                         : juce::String (juce::String::fromUTF8 ("Kein Notenbild verfügbar")))
+    status = piece == nullptr ? juce::String (tr ("Noten hierher ziehen oder über „Öffnen“ laden"))
+                              : (piece->notation == nullptr ? (piece->notationFromScore ? juce::String (tr ("Klicken, um die Noten zu setzen"))
+                                                                                         : juce::String (tr ("Kein Notenbild verfügbar")))
                                                             : juce::String());
     updateNav();
     repaint();
@@ -330,8 +330,8 @@ void MusicDesk::paint (juce::Graphics& g)
         g.setColour (juce::Colours::grey);
         g.setFont (theme::serif (18.0f));
         const bool clickable = piece != nullptr && piece->notationFromScore && ! proc.isEngraving();
-        auto text = proc.isLoading() ? juce::String (juce::String::fromUTF8 ("Stück wird geladen…"))
-                                     : (proc.isEngraving() ? juce::String (juce::String::fromUTF8 ("Noten werden gesetzt…")) : status);
+        auto text = proc.isLoading() ? juce::String (tr ("Stück wird geladen…"))
+                                     : (proc.isEngraving() ? juce::String (tr ("Noten werden gesetzt…")) : status);
         if (clickable)
         {
             g.setColour (theme::gold.withAlpha (isMouseOver() ? 0.25f : 0.12f));
@@ -460,7 +460,7 @@ void MusicDesk::updateNav()
         shownPageForLabel = page;
         prev.setEnabled (scroll > 1.0e-3);
         next.setEnabled (scroll < maxScroll() - 1.0e-3);
-        pageLabel.setText (count == 0 ? juce::String() : "Seite " + juce::String (page + 1) + " von " + juce::String (count), juce::dontSendNotification);
+        pageLabel.setText (count == 0 ? juce::String() : tr ("Seite ") + juce::String (page + 1) + tr (" von ") + juce::String (count), juce::dontSendNotification);
         return;
     }
     prev.setEnabled (firstPage > 0);
@@ -468,10 +468,10 @@ void MusicDesk::updateNav()
     if (count == 0)
         pageLabel.setText ({}, juce::dontSendNotification);
     else if (n == 2 && firstPage + 1 < count)
-        pageLabel.setText ("Seiten " + juce::String (firstPage + 1) + juce::String::fromUTF8 ("–") + juce::String (firstPage + 2) + " von " + juce::String (count),
+        pageLabel.setText (tr ("Seiten ") + juce::String (firstPage + 1) + juce::String::fromUTF8 ("–") + juce::String (firstPage + 2) + tr (" von ") + juce::String (count),
                            juce::dontSendNotification);
     else
-        pageLabel.setText ("Seite " + juce::String (firstPage + 1) + " von " + juce::String (count), juce::dontSendNotification);
+        pageLabel.setText (tr ("Seite ") + juce::String (firstPage + 1) + tr (" von ") + juce::String (count), juce::dontSendNotification);
 }
 
 static void highlight (juce::Drawable* d, bool on,
@@ -685,7 +685,7 @@ juce::Rectangle<float> MusicDesk::elementArea (Page& page, juce::Drawable* d, ju
 
 std::unique_ptr<juce::AccessibilityHandler> MusicDesk::createAccessibilityHandler()
 {
-    setTitle ("Notenpult");
+    setTitle (tr ("Notenpult"));
     return std::make_unique<juce::AccessibilityHandler> (*this, juce::AccessibilityRole::button,
         juce::AccessibilityActions().addAction (juce::AccessibilityActionType::press, [this] {
             if (piece != nullptr && piece->notation == nullptr && piece->notationFromScore)

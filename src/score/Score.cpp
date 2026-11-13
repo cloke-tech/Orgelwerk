@@ -1,4 +1,5 @@
 #include "Score.h"
+#include "../engine/I18n.h"
 #include "../engine/SoundFont.h"
 #include <map>
 #include <set>
@@ -565,13 +566,13 @@ namespace ScoreIO
             auto& first = *group[ref];
             part.drums = first.channel == 9;
             const bool multiTrack = trackNames.size() > 1 && first.trackName.isNotEmpty() && first.track > 0;
-            part.name = multiTrack ? first.trackName : "Kanal " + juce::String (first.channel + 1);
+            part.name = multiTrack ? first.trackName : tr ("Kanal ") + juce::String (first.channel + 1);
             if (group.size() > 1)
             {
                 juce::StringArray chans;
                 for (auto* g : group)
                     chans.add (juce::String (g->channel + 1));
-                part.name = multiTrack ? first.trackName : juce::String::fromUTF8 ("Kanäle ") + chans.joinIntoString ("+");
+                part.name = multiTrack ? first.trackName : tr ("Kanäle ") + chans.joinIntoString ("+");
             }
 
             const double firstBeat = first.notes.front().start;
@@ -763,13 +764,13 @@ namespace ScoreIO
         }
         if (! ok)
         {
-            error = juce::String::fromUTF8 ("Die MIDI-Daten sind ungültig.");
+            error = tr ("Die MIDI-Daten sind ungültig.");
             return {};
         }
         auto s = fromMidi (mf, sf);
         if (s == nullptr || s->notes.empty())
         {
-            error = juce::String::fromUTF8 ("Die Datei enthält keine Noten.");
+            error = tr ("Die Datei enthält keine Noten.");
             return {};
         }
         return s;
@@ -780,7 +781,7 @@ namespace ScoreIO
         juce::MemoryBlock mb;
         if (! f.loadFileAsData (mb))
         {
-            error = "Datei kann nicht gelesen werden.";
+            error = tr ("Datei kann nicht gelesen werden.");
             return {};
         }
         auto s = fromMidiData (mb.getData(), mb.getSize(), sf, error);

@@ -1447,7 +1447,10 @@ juce::String divisionAbbreviation (const juce::String& name, int division, bool 
         { "oberwerk", "Ow." }, { "brustwerk", "Bw." }, { "kronwerk", "Kw." }, { "fernwerk", "Fw." }, { "schwell", "Sw." },
         { "grand orgue", "G.O." }, { "grand-orgue", "G.O." }, { "great", "Gt." }, { "positif", "Pos." }, { "positiv", "Pos." },
         { "récit", "Réc." }, { "recit", "Réc." }, { "swell", "Sw." }, { "choir", "Ch." }, { "solo", "Solo" },
-        { "bombarde", "Bomb." }, { "pedal", "Ped." }, { "pédale", "Ped." }, { "pedale", "Ped." }
+        { "bombarde", "Bomb." }, { "hoofdwerk", "Hw." }, { "rugwerk", "Rw." }, { "zwelwerk", "Zw." }, { "bovenwerk", "Bw." },
+        { "órgano mayor", "O.M." }, { "organo mayor", "O.M." }, { "grand'organo", "G.O." }, { "grand’organo", "G.O." },
+        { "espressivo", "Espr." }, { "expresivo", "Expr." }, { "écho", "Écho" }, { "echo", "Echo" }, { "eco", "Eco" },
+        { "pedal", "Ped." }, { "pédale", "Ped." }, { "pedale", "Ped." }, { "pedaal", "Ped." }
     };
     for (auto& [word, abbr] : known)
         if (n.contains (juce::String::fromUTF8 (word)))

@@ -1,5 +1,6 @@
 #pragma once
 #include "Theme.h"
+#include "../engine/I18n.h"
 #include "../PluginProcessor.h"
 
 namespace orgel
@@ -153,10 +154,10 @@ private:
 
     OrgelProcessor& proc;
     int division;
-    juce::Label nameLabel { {}, "Name" }, deviceLabel { {}, "MIDI-Eingang" }, channelLabel { {}, "Kanal" }, volumeLabel { {}, juce::String::fromUTF8 ("Lautstärke") };
+    juce::Label nameLabel { {}, tr ("Name") }, deviceLabel { {}, tr ("MIDI-Eingang") }, channelLabel { {}, tr ("Kanal") }, volumeLabel { {}, tr ("Lautstärke") };
     juce::TextEditor name;
     juce::ComboBox device, channel;
-    juce::TextButton learn { "MIDI lernen" }, addStop { juce::String::fromUTF8 ("Register hinzufügen…") }, allOff { "Alle Register ab" }, remove { "Manual entfernen" };
+    juce::TextButton learn { tr ("MIDI lernen") }, addStop { tr ("Register hinzufügen…") }, allOff { tr ("Alle Register ab") }, remove { tr ("Manual entfernen") };
     juce::Slider volume { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::StringArray deviceIds, deviceNames;
 };

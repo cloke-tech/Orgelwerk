@@ -51,6 +51,12 @@ SF2-SoundFont (eingebaut: **Jeux14**), die Noten stehen auf dem Notenpult in der
   und leuchten.
 - **Computertastatur** spielt Manual I: `A W S E D F T G Z/Y H U J K O L P`, Oktave mit `,` und `.`.
 
+## Sprachen
+
+Deutsch, Englisch, Französisch, Spanisch, Italienisch und Niederländisch. Orgelwerk startet in
+der Sprache des Systems (sonst Englisch); unter **Ansicht → Sprache** lässt sie sich festlegen
+(gilt ab dem nächsten Start). Die Texte stehen in `resources/lang/*.json`.
+
 ## Notenformate
 
 | Import | Export |

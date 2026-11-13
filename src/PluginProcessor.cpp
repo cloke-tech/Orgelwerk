@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "engine/I18n.h"
 #include "ui/Profile.h"
 #include "PluginEditor.h"
 #include <set>
@@ -187,7 +188,7 @@ void OrgelProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             learnResult.division = learnDivision.exchange (-1);
             learnResult.channel = ch;
             learnResult.device = deviceId;
-            learnResult.deviceName = fromHost ? juce::String ("DAW / Host") : router.nameFor (deviceIndex);
+            learnResult.deviceName = fromHost ? juce::String (tr ("DAW / Host")) : router.nameFor (deviceIndex);
             learnResult.ready = true;
         }
         for (int d = 0; d < numDivisions; ++d)
@@ -515,7 +516,7 @@ void OrgelProcessor::reengrave (bool evenIfNotShown)
             {
                 {
                     const juce::ScopedLock sl (messageLock);
-                    loadMessage = "Notenbild konnte nicht erzeugt werden: " + error;
+                    loadMessage = tr ("Notenbild konnte nicht erzeugt werden: ") + error;
                 }
                 sendChangeMessage();
                 return;

@@ -1,4 +1,5 @@
 #include "Formats.h"
+#include "../engine/I18n.h"
 #include "BinaryData.h"
 #include <set>
 #include "NotationBuilder.h"
@@ -29,11 +30,11 @@ std::vector<std::pair<juce::String, juce::String>> importFormatList()
         { "ABC", "*.abc" },
         { "Humdrum (**kern)", "*.krn;*.hum;*.hmd" },
         { "Plaine & Easie", "*.pae" },
-        { "GABC (Gregorianik)", "*.gabc" },
+        { tr ("GABC (Gregorianik)"), "*.gabc" },
         { "MuseData", "*.md;*.msd" },
         { "EsAC", "*.esac" },
         { "CMME", "*.cmme" },
-        { juce::String::fromUTF8 ("MuseScore / Guitar Pro / Capella / Overture / Bagpipe / Band-in-a-Box (über MuseScore)"),
+        { tr ("MuseScore / Guitar Pro / Capella / Overture / Bagpipe / Band-in-a-Box (über MuseScore)"),
           "*.mscz;*.mscx;*.mscs;*.gp;*.gpx;*.gp3;*.gp4;*.gp5;*.gtp;*.ptb;*.cap;*.capx;*.ove;*.scw;*.bww;*.mgu;*.sgu;*.bmw" },
     };
 }
@@ -83,21 +84,21 @@ static bool runMuseScore (const juce::File& in, const juce::File& out, juce::Str
     auto exe = findMuseScore();
     if (! exe.existsAsFile())
     {
-        error = juce::String::fromUTF8 ("Für dieses Format wird MuseScore benötigt (kostenlos, musescore.org). Es wurde nicht gefunden.");
+        error = tr ("Für dieses Format wird MuseScore benötigt (kostenlos, musescore.org). Es wurde nicht gefunden.");
         return false;
     }
     juce::ChildProcess p;
     if (! p.start (juce::StringArray { exe.getFullPathName(), "-o", out.getFullPathName(), in.getFullPathName() },
                    juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr))
     {
-        error = "MuseScore konnte nicht gestartet werden.";
+        error = tr ("MuseScore konnte nicht gestartet werden.");
         return false;
     }
     auto output = p.readAllProcessOutput();
     p.waitForProcessToFinish (180000);
     if (! out.existsAsFile() || out.getSize() == 0)
     {
-        error = "MuseScore konnte die Datei nicht umwandeln.\n" + output.getLastCharacters (400);
+        error = tr ("MuseScore konnte die Datei nicht umwandeln.\n") + output.getLastCharacters (400);
         return false;
     }
     return true;
@@ -357,7 +358,7 @@ std::unique_ptr<Piece> load (const juce::File& f, const SoundFont* sf, int numMa
         juce::String engraveError;
         piece->notation = engrave (*piece->score, isPedal, map, engraveError);
         if (piece->notation == nullptr)
-            piece->warning = "Notenbild konnte nicht erzeugt werden: " + engraveError;
+            piece->warning = tr ("Notenbild konnte nicht erzeugt werden: ") + engraveError;
         return piece;
     }
 
@@ -371,7 +372,7 @@ std::unique_ptr<Piece> load (const juce::File& f, const SoundFont* sf, int numMa
     }
     else if (! Notation::verovioExtensions().contains (extOf (f)))
     {
-        error = juce::String::fromUTF8 ("Dieses Dateiformat wird nicht unterstützt: .") + extOf (f);
+        error = tr ("Dieses Dateiformat wird nicht unterstützt: .") + extOf (f);
         return {};
     }
 
@@ -393,21 +394,21 @@ std::unique_ptr<Piece> load (const juce::File& f, const SoundFont* sf, int numMa
 std::vector<ExportFormat> exportFormats()
 {
     return {
-        { "mid", "MIDI-Datei", "mid" },
+        { "mid", tr ("MIDI-Datei"), "mid" },
         { "musicxml", "MusicXML", "musicxml" },
-        { "mxl", "MusicXML komprimiert", "mxl" },
+        { "mxl", tr ("MusicXML komprimiert"), "mxl" },
         { "mei", "MEI", "mei" },
         { "krn", "Humdrum **kern", "krn" },
         { "abc", "ABC-Notation", "abc" },
         { "ly", "LilyPond", "ly" },
-        { "pdf", "PDF (Notenseiten)", "pdf" },
-        { "svg", "SVG (Notenseiten)", "svg" },
-        { "png", "PNG (Notenseiten)", "png" },
-        { "mscz", juce::String::fromUTF8 ("MuseScore (über MuseScore)"), "mscz", true },
-        { "wav", "WAV-Audio (Orgelklang)", "wav", false, true },
-        { "aiff", "AIFF-Audio (Orgelklang)", "aiff", false, true },
-        { "flac", "FLAC-Audio (Orgelklang)", "flac", false, true },
-        { "ogg", "Ogg-Vorbis-Audio (Orgelklang)", "ogg", false, true },
+        { "pdf", tr ("PDF (Notenseiten)"), "pdf" },
+        { "svg", tr ("SVG (Notenseiten)"), "svg" },
+        { "png", tr ("PNG (Notenseiten)"), "png" },
+        { "mscz", tr ("MuseScore (über MuseScore)"), "mscz", true },
+        { "wav", tr ("WAV-Audio (Orgelklang)"), "wav", false, true },
+        { "aiff", tr ("AIFF-Audio (Orgelklang)"), "aiff", false, true },
+        { "flac", tr ("FLAC-Audio (Orgelklang)"), "flac", false, true },
+        { "ogg", tr ("Ogg-Vorbis-Audio (Orgelklang)"), "ogg", false, true },
     };
 }
 
@@ -454,7 +455,7 @@ static bool writePdf (const std::vector<juce::Image>& pages, const juce::File& t
     juce::FileOutputStream out (target);
     if (! out.openedOk())
     {
-        error = "Datei kann nicht geschrieben werden.";
+        error = tr ("Datei kann nicht geschrieben werden.");
         return false;
     }
     std::vector<juce::int64> offsets;
@@ -521,7 +522,7 @@ bool renderAudio (const ExportContext& ctx, juce::AudioFormatWriter& writer, juc
 {
     if (ctx.piece == nullptr || ctx.piece->score == nullptr || ctx.liveOrgan == nullptr)
     {
-        error = juce::String::fromUTF8 ("Kein Stück geladen.");
+        error = tr ("Kein Stück geladen.");
         return false;
     }
     OrganEngine organ;
@@ -593,7 +594,7 @@ bool renderAudio (const ExportContext& ctx, juce::AudioFormatWriter& writer, juc
             organ.releaseSource (srcPlayer);
         if (! writer.writeFromAudioSampleBuffer (buffer, 0, block))
         {
-            error = "Fehler beim Schreiben der Audiodatei.";
+            error = tr ("Fehler beim Schreiben der Audiodatei.");
             return false;
         }
         rendered += block / ctx.sampleRate;
@@ -604,7 +605,7 @@ bool renderAudio (const ExportContext& ctx, juce::AudioFormatWriter& writer, juc
         }
         if (ctx.progress && ! ctx.progress ((float) juce::jmin (1.0, rendered / total)))
         {
-            error = "Abgebrochen.";
+            error = tr ("Abgebrochen.");
             return false;
         }
     }
@@ -615,7 +616,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
 {
     if (ctx.piece == nullptr || ctx.piece->score == nullptr)
     {
-        error = juce::String::fromUTF8 ("Kein Stück geladen.");
+        error = tr ("Kein Stück geladen.");
         return false;
     }
     auto& score = *ctx.piece->score;
@@ -630,12 +631,12 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
     auto writeText = [&] (const juce::String& text) {
         if (text.isEmpty())
         {
-            error = "Export ergab keine Daten.";
+            error = tr ("Export ergab keine Daten.");
             return false;
         }
         if (! target.replaceWithText (text, false, false, "\n"))
         {
-            error = "Datei kann nicht geschrieben werden: " + target.getFullPathName();
+            error = tr ("Datei kann nicht geschrieben werden: ") + target.getFullPathName();
             return false;
         }
         return true;
@@ -643,7 +644,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
     auto needNotation = [&] {
         if (notation == nullptr || ! notation->isLoaded())
         {
-            error = juce::String::fromUTF8 ("Für dieses Format wird ein Notenbild benötigt, das nicht erzeugt werden konnte.");
+            error = tr ("Für dieses Format wird ein Notenbild benötigt, das nicht erzeugt werden konnte.");
             return false;
         }
         return true;
@@ -667,7 +668,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
         }
         if (! ScoreIO::saveMidiFile (score, target, ctx.partNames, regs))
         {
-            error = "MIDI-Datei konnte nicht geschrieben werden.";
+            error = tr ("MIDI-Datei konnte nicht geschrieben werden.");
             return false;
         }
         return true;
@@ -692,7 +693,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
         juce::FileOutputStream out (target);
         if (! out.openedOk() || ! zip.writeToStream (out, nullptr))
         {
-            error = "MXL-Datei konnte nicht geschrieben werden.";
+            error = tr ("MXL-Datei konnte nicht geschrieben werden.");
             return false;
         }
         return true;
@@ -708,7 +709,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
         for (int p = 0; p < notation->getPageCount(); ++p)
             if (! numbered (target, p, notation->getPageCount()).replaceWithText (notation->getRawPageSVG (p)))
             {
-                error = "SVG konnte nicht geschrieben werden.";
+                error = tr ("SVG konnte nicht geschrieben werden.");
                 return false;
             }
         return true;
@@ -720,7 +721,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
         auto pages = renderPages (*notation, fmt.id == "pdf" ? 0.95f : 0.75f); // ~240 dpi for PDF
         if (pages.empty())
         {
-            error = "Seiten konnten nicht gezeichnet werden.";
+            error = tr ("Seiten konnten nicht gezeichnet werden.");
             return false;
         }
         if (fmt.id == "pdf")
@@ -733,7 +734,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
             juce::FileOutputStream out (file);
             if (! out.openedOk() || ! png.writeImageToStream (pages[(size_t) p], out))
             {
-                error = "PNG konnte nicht geschrieben werden.";
+                error = tr ("PNG konnte nicht geschrieben werden.");
                 return false;
             }
         }
@@ -744,7 +745,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
         juce::TemporaryFile temp (".musicxml");
         if (! temp.getFile().replaceWithText (NotationBuilder::toMusicXML (score, builderOptions (ctx))))
         {
-            error = "Zwischendatei konnte nicht geschrieben werden.";
+            error = tr ("Zwischendatei konnte nicht geschrieben werden.");
             return false;
         }
         target.deleteFile();
@@ -766,7 +767,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
         std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream> (target);
         if (! static_cast<juce::FileOutputStream*> (stream.get())->openedOk())
         {
-            error = "Datei kann nicht geschrieben werden.";
+            error = tr ("Datei kann nicht geschrieben werden.");
             return false;
         }
         auto options = juce::AudioFormatWriterOptions {}
@@ -778,7 +779,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
         auto writer = af->createWriterFor (stream, options);
         if (writer == nullptr)
         {
-            error = juce::String::fromUTF8 ("Audioformat wird mit diesen Einstellungen nicht unterstützt.");
+            error = tr ("Audioformat wird mit diesen Einstellungen nicht unterstützt.");
             return false;
         }
         const bool ok = renderAudio (ctx, *writer, error);
@@ -787,7 +788,7 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
             target.deleteFile();
         return ok;
     }
-    error = "Unbekanntes Exportformat.";
+    error = tr ("Unbekanntes Exportformat.");
     return false;
 }
 } // namespace orgel::Formats

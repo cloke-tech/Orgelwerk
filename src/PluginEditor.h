@@ -1,5 +1,6 @@
 #pragma once
 #include "PluginProcessor.h"
+#include "engine/I18n.h"
 #include "ui/Console.h"
 #include "ui/MusicDesk.h"
 #include <set>
@@ -72,6 +73,8 @@ private:
     void runDeskTest();
     void runScreenshot();
     void toggleManualColours();
+    juce::PopupMenu languageMenu (int firstId);
+    void chooseLanguage (int index);
     juce::VBlankAttachment vblank;
     double lastAnimate = 0;
     void rebuildConsole();
@@ -90,18 +93,18 @@ private:
     OrgelProcessor& proc;
     juce::TooltipWindow tooltips { this, 600 };
 
-    juce::TextButton openButton { juce::String::fromUTF8 ("Öffnen…") }, exportButton { "Exportieren" }, rewindButton, playButton, stopButton,
-        partsButton { "Stimmen" }, addManualButton { "+ Manual" }, soundFontButton { "SoundFont" }, optionsButton { "Optionen" };
-    juce::TextButton trackButton { "Registrierspur" };
+    juce::TextButton openButton { tr ("Öffnen…") }, exportButton { tr ("Exportieren") }, rewindButton, playButton, stopButton,
+        partsButton { tr ("Stimmen") }, addManualButton { "+ Manual" }, soundFontButton { "SoundFont" }, optionsButton { tr ("Optionen") };
+    juce::TextButton trackButton { tr ("Registrierspur") };
     MarkerStrip markerStrip;
     std::set<int> computerKeysDown;
     int computerOctave = 60;
-    juce::ToggleButton registrationToggle { "Registrierung aus Datei" };
+    juce::ToggleButton registrationToggle { tr ("Registrierung aus Datei") };
     juce::Slider position { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::Slider speed { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Slider reverb { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
     juce::Slider volume { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
-    juce::Label timeLabel, titleLabel, speedLabel { {}, "Tempo" }, reverbLabel { {}, "Hall" }, volumeLabel { {}, juce::String::fromUTF8 ("Lautstärke") };
+    juce::Label timeLabel, titleLabel, speedLabel { {}, tr ("Tempo") }, reverbLabel { {}, tr ("Hall") }, volumeLabel { {}, tr ("Lautstärke") };
 
     StopJamb leftJamb, rightJamb;
     MusicDesk desk;

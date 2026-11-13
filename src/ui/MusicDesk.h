@@ -1,5 +1,6 @@
 #pragma once
 #include "Theme.h"
+#include "../engine/I18n.h"
 #include "../PluginProcessor.h"
 #include <set>
 
@@ -88,7 +89,7 @@ private:
 
     juce::TextButton prev { "<" }, next { ">" };
     juce::TextButton zoomButton;
-    juce::ToggleButton followButton { juce::String::fromUTF8 ("Mitblättern") };
+    juce::ToggleButton followButton { tr ("Mitblättern") };
     juce::Label pageLabel;
     juce::String status;
     bool wasBusy = false;

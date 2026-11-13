@@ -32,14 +32,14 @@ OrgelEditor::OrgelEditor (OrgelProcessor& p)
     rewindButton.setButtonText (juce::String::fromUTF8 ("\xe2\x8f\xae"));
     playButton.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb6"));
     stopButton.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xa0"));
-    rewindButton.setTooltip ("Zum Anfang");
-    playButton.setTooltip ("Abspielen / Pause (Leertaste)");
-    stopButton.setTooltip ("Stopp");
-    openButton.setTooltip (juce::String::fromUTF8 ("Noten öffnen: MIDI, MusicXML, MEI, ABC, Humdrum, … (oder Datei auf das Fenster ziehen)"));
-    exportButton.setTooltip ("Noten oder Orgelklang in eine Datei schreiben");
-    partsButton.setTooltip ("Welche Stimme auf welchem Manual oder dem Pedal spielt");
-    addManualButton.setTooltip (juce::String::fromUTF8 ("Ein weiteres Manual hinzufügen"));
-    registrationToggle.setTooltip (juce::String::fromUTF8 ("Register aus der Datei ziehen (Programmwechsel), wenn ein Stück geladen wird"));
+    rewindButton.setTooltip (tr ("Zum Anfang"));
+    playButton.setTooltip (tr ("Abspielen / Pause (Leertaste)"));
+    stopButton.setTooltip (tr ("Stopp"));
+    openButton.setTooltip (tr ("Noten öffnen: MIDI, MusicXML, MEI, ABC, Humdrum, … (oder Datei auf das Fenster ziehen)"));
+    exportButton.setTooltip (tr ("Noten oder Orgelklang in eine Datei schreiben"));
+    partsButton.setTooltip (tr ("Welche Stimme auf welchem Manual oder dem Pedal spielt"));
+    addManualButton.setTooltip (tr ("Ein weiteres Manual hinzufügen"));
+    registrationToggle.setTooltip (tr ("Register aus der Datei ziehen (Programmwechsel), wenn ein Stück geladen wird"));
 
     openButton.onClick = [this] { openFile(); };
     exportButton.onClick = [this] { showExportMenu(); };
@@ -48,7 +48,7 @@ OrgelEditor::OrgelEditor (OrgelProcessor& p)
     stopButton.onClick = [this] { proc.stop(); };
     partsButton.onClick = [this] { showPartMenu(); };
     trackButton.onClick = [this] { showTrackMenu(); };
-    trackButton.setTooltip (juce::String::fromUTF8 ("Registrierungen an Stellen im Stück merken; beim Abspielen wird dort umgeschaltet (Taste R)"));
+    trackButton.setTooltip (tr ("Registrierungen an Stellen im Stück merken; beim Abspielen wird dort umgeschaltet (Taste R)"));
     addManualButton.onClick = [this] { proc.organ.addManual(); };
     soundFontButton.onClick = [this] { showSoundFontMenu(); };
     optionsButton.onClick = [this] { showOptionsMenu(); };
@@ -63,7 +63,7 @@ OrgelEditor::OrgelEditor (OrgelProcessor& p)
     position.setRange (0.0, 1.0);
     position.onDragStart = [this] { draggingPosition = true; };
     position.onDragEnd = [this] { draggingPosition = false; proc.seek (position.getValue()); };
-    position.setTooltip (juce::String::fromUTF8 ("Position im Stück"));
+    position.setTooltip (tr ("Position im Stück"));
 
     speed.setRange (25.0, 200.0, 1.0);
     speed.setTextValueSuffix (" %");
@@ -75,11 +75,11 @@ OrgelEditor::OrgelEditor (OrgelProcessor& p)
     reverb.setRange (0.0, 1.0, 0.01);
     reverb.setValue (proc.organ.reverb, juce::dontSendNotification);
     reverb.onValueChange = [this] { proc.organ.reverb = (float) reverb.getValue(); };
-    reverb.setTooltip ("Kirchenhall");
+    reverb.setTooltip (tr ("Kirchenhall"));
     volume.setRange (0.0, 1.5, 0.01);
     volume.setValue (proc.organ.master, juce::dontSendNotification);
     volume.onValueChange = [this] { proc.organ.master = (float) volume.getValue(); };
-    volume.setTooltip (juce::String::fromUTF8 ("Gesamtlautstärke"));
+    volume.setTooltip (tr ("Gesamtlautstärke"));
 
     for (auto* l : { &timeLabel, &titleLabel, &speedLabel, &reverbLabel, &volumeLabel })
     {
@@ -196,7 +196,7 @@ void OrgelEditor::rebuildConsole()
         auto* s = swells.add (new juce::Slider (juce::Slider::LinearVertical, juce::Slider::NoTextBox));
         s->setRange (0.0, 1.5, 0.01);
         s->setValue (proc.organ.getDivision (d).volume, juce::dontSendNotification);
-        s->setTooltip (juce::String::fromUTF8 ("Lautstärke ") + proc.organ.getDivision (d).name);
+        s->setTooltip (tr ("Lautstärke ") + proc.organ.getDivision (d).name);
         s->onValueChange = [this, d, s] { proc.organ.setDivisionVolume (d, (float) s->getValue()); };
         addAndMakeVisible (s);
     }
@@ -285,7 +285,7 @@ void OrgelEditor::timerCallback()
     timeLabel.setText (formatTime (draggingPosition ? position.getValue() : proc.getPosition()) + " / " + formatTime (len), juce::dontSendNotification);
     playButton.setButtonText (proc.isPlaying() ? juce::String::fromUTF8 ("\xe2\x8f\xb8") : juce::String::fromUTF8 ("\xe2\x96\xb6"));
     auto piece = proc.getPiece();
-    titleLabel.setText (proc.isLoading() ? juce::String (juce::String::fromUTF8 ("Lade…")) : (piece != nullptr ? piece->score->title : juce::String ("Orgelwerk")),
+    titleLabel.setText (proc.isLoading() ? juce::String (tr ("Lade…")) : (piece != nullptr ? piece->score->title : juce::String ("Orgelwerk")),
                         juce::dontSendNotification);
 }
 
@@ -751,7 +751,7 @@ void OrgelEditor::resized()
     partsButton.setBounds (rightPart.removeFromRight (72));
     rightPart.removeFromRight (4);
     trackButton.setBounds (rightPart.removeFromRight (112));
-    registrationToggle.setVisible (false); // lives in the "Stimmen" menu
+    registrationToggle.setVisible (false); // lives in the tr ("Stimmen") menu
 
     auto mid = bar;
     auto top = mid.removeFromTop (mid.getHeight() / 2);
@@ -835,7 +835,7 @@ void OrgelEditor::filesDropped (const juce::StringArray& files, int, int)
 
 void OrgelEditor::openFile()
 {
-    chooser = std::make_unique<juce::FileChooser> (juce::String::fromUTF8 ("Noten öffnen"), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+    chooser = std::make_unique<juce::FileChooser> (tr ("Noten öffnen"), juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                    Formats::importWildcard());
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
         auto f = fc.getResult();
@@ -850,7 +850,7 @@ void OrgelEditor::showExportMenu()
     juce::PopupMenu m;
     if (piece == nullptr)
     {
-        m.addItem (-1, juce::String::fromUTF8 ("Zuerst ein Stück laden"), false);
+        m.addItem (-1, tr ("Zuerst ein Stück laden"), false);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&exportButton));
         return;
     }
@@ -861,7 +861,7 @@ void OrgelEditor::showExportMenu()
     {
         auto& f = formats[(size_t) i];
         const bool enabled = ! f.needsMuseScore || hasMuseScore;
-        auto label = f.description + "  (." + f.extension + ")" + (enabled ? "" : juce::String::fromUTF8 (" – MuseScore fehlt"));
+        auto label = f.description + "  (." + f.extension + ")" + (enabled ? "" : tr (" – MuseScore fehlt"));
         if (f.isAudio)
             audio.addItem (i + 1, label, enabled);
         else if (f.id == "pdf" || f.id == "svg" || f.id == "png")
@@ -869,10 +869,10 @@ void OrgelEditor::showExportMenu()
         else
             notes.addItem (i + 1, label, enabled);
     }
-    m.addSectionHeader ("Noten");
-    m.addSubMenu ("Notenformate", notes);
-    m.addSubMenu ("Notenseiten (Bild/PDF)", pages);
-    m.addSectionHeader (juce::String::fromUTF8 ("Klang (über die SF2 gerendert)"));
+    m.addSectionHeader (tr ("Noten"));
+    m.addSubMenu (tr ("Notenformate"), notes);
+    m.addSubMenu (tr ("Notenseiten (Bild/PDF)"), pages);
+    m.addSectionHeader (tr ("Klang (über die SF2 gerendert)"));
     m.addSubMenu ("Audio", audio);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&exportButton), [this, formats] (int r) {
         if (r > 0)
@@ -888,7 +888,7 @@ void OrgelEditor::exportAs (const Formats::ExportFormat& fmt)
     auto base = piece->source.getParentDirectory().isDirectory() ? piece->source.getParentDirectory()
                                                                   : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
     auto name = piece->source.getFileNameWithoutExtension();
-    chooser = std::make_unique<juce::FileChooser> ("Exportieren als " + fmt.description, base.getChildFile (name + "." + fmt.extension),
+    chooser = std::make_unique<juce::FileChooser> (tr ("Exportieren als ") + fmt.description, base.getChildFile (name + "." + fmt.extension),
                                                    "*." + fmt.extension);
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
                           [this, fmt, piece] (const juce::FileChooser& fc) {
@@ -901,7 +901,7 @@ void OrgelEditor::exportAs (const Formats::ExportFormat& fmt)
         struct Job : public juce::ThreadWithProgressWindow
         {
             Job (OrgelProcessor& p, std::shared_ptr<Piece> pc, Formats::ExportFormat f, juce::File t)
-                : juce::ThreadWithProgressWindow ("Exportiere " + t.getFileName() + juce::String::fromUTF8 ("…"), true, true), proc (p), piece (pc), fmt (f), target (t) {}
+                : juce::ThreadWithProgressWindow (tr ("Exportiere ") + t.getFileName() + juce::String::fromUTF8 ("…"), true, true), proc (p), piece (pc), fmt (f), target (t) {}
             void run() override
             {
                 auto ctx = proc.makeExportContext();
@@ -932,7 +932,7 @@ void OrgelEditor::exportAs (const Formats::ExportFormat& fmt)
             if (job->ok)
                 job->target.revealToUser();
             else
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Export", job->error);
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, tr ("Export"), job->error);
         };
         juce::Timer::callAfterDelay (200, [poll] { (*poll)(); });
     });
@@ -944,7 +944,7 @@ void OrgelEditor::showPartMenu()
     juce::PopupMenu m;
     if (piece == nullptr)
     {
-        m.addItem (-1, juce::String::fromUTF8 ("Kein Stück geladen"), false);
+        m.addItem (-1, tr ("Kein Stück geladen"), false);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&partsButton));
         return;
     }
@@ -960,15 +960,15 @@ void OrgelEditor::showPartMenu()
             sub.addItem (p * 100 + d + 1, div.pedal ? div.name : romanNumeral (d + 1) + " " + div.name, true, current == d);
         }
         sub.addItem (p * 100 + 99, "stumm", true, current < 0);
-        auto label = part.name + "  (" + juce::String (part.count) + " Noten, "
+        auto label = part.name + "  (" + juce::String (part.count) + tr (" Noten, ")
                      + juce::MidiMessage::getMidiNoteName (part.lowest, true, true, 4) + juce::String::fromUTF8 ("–")
                      + juce::MidiMessage::getMidiNoteName (part.highest, true, true, 4) + juce::String::fromUTF8 (")  →  ")
                      + (current >= 0 ? proc.organ.getDivision (current).name : juce::String ("stumm"));
         m.addSubMenu (label, sub);
     }
     m.addSeparator();
-    m.addItem (100001, "Registrierung aus der Datei beim Laden ziehen", true, proc.applyFileRegistration);
-    m.addItem (100000, "Register aus der Datei jetzt ziehen");
+    m.addItem (100001, tr ("Registrierung aus der Datei beim Laden ziehen"), true, proc.applyFileRegistration);
+    m.addItem (100000, tr ("Register aus der Datei jetzt ziehen"));
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&partsButton), [this] (int r) {
         if (r == 100001)
         {
@@ -1019,7 +1019,7 @@ void OrgelEditor::setUpStandaloneWindow()
     window->setResizable (true, false);
    #if JUCE_MAC
     juce::PopupMenu appleExtras;
-    appleExtras.addItem (4, juce::String::fromUTF8 ("Einstellungen…"));
+    appleExtras.addItem (4, tr ("Einstellungen…"));
     juce::MenuBarModel::setMacMainMenu (this, &appleExtras);
    #else
     window->setMenuBar (this);
@@ -1037,9 +1037,9 @@ void OrgelEditor::setUpStandaloneWindow()
 juce::StringArray OrgelEditor::getMenuBarNames()
 {
    #if JUCE_MAC
-    return { "Ablage", "Wiedergabe", "Orgel", "Ansicht" };
+    return { tr ("Ablage"), tr ("Wiedergabe"), tr ("Orgel"), tr ("Ansicht") };
    #else
-    return { "Datei", "Wiedergabe", "Orgel", "Ansicht" };
+    return { tr ("Datei"), tr ("Wiedergabe"), tr ("Orgel"), tr ("Ansicht") };
    #endif
 }
 
@@ -1058,7 +1058,7 @@ juce::PopupMenu OrgelEditor::getMenuForIndex (int index, const juce::String&)
     const juce::String cmd = juce::String::fromUTF8 ("\xe2\x8c\x98");
     if (index == 0)
     {
-        m.addItem (item (1, juce::String::fromUTF8 ("Öffnen…"), cmd + "O"));
+        m.addItem (item (1, tr ("Öffnen…"), cmd + "O"));
         juce::PopupMenu exportMenu;
         auto formats = Formats::exportFormats();
         const bool hasMuseScore = Formats::findMuseScore().existsAsFile();
@@ -1069,53 +1069,86 @@ juce::PopupMenu OrgelEditor::getMenuForIndex (int index, const juce::String&)
             if (f.id == "mscz" || f.id == "png")
                 exportMenu.addSeparator();
         }
-        m.addSubMenu ("Exportieren", exportMenu, piece != nullptr);
+        m.addSubMenu (tr ("Exportieren"), exportMenu, piece != nullptr);
         m.addSeparator();
-        m.addItem (item (2, juce::String::fromUTF8 ("SoundFont laden…")));
-        m.addItem (item (3, "Eingebaute SoundFont (Jeux14)"));
+        m.addItem (item (2, tr ("SoundFont laden…")));
+        m.addItem (item (3, tr ("Eingebaute SoundFont (Jeux14)")));
        #if ! JUCE_MAC
         m.addSeparator();
-        m.addItem (item (4, juce::String::fromUTF8 ("Audio- und MIDI-Einstellungen…")));
+        m.addItem (item (4, tr ("Audio- und MIDI-Einstellungen…")));
        #endif
     }
     else if (index == 1)
     {
-        m.addItem (item (10, proc.isPlaying() ? "Pause" : "Abspielen", "Leertaste", piece != nullptr));
-        m.addItem (item (11, "Stopp", {}, piece != nullptr));
-        m.addItem (item (12, "Zum Anfang", {}, piece != nullptr));
-        m.addItem (item (13, juce::String::fromUTF8 ("Stück in Schleife"), {}, true, proc.getLoop()));
+        m.addItem (item (10, proc.isPlaying() ? tr ("Pause") : tr ("Abspielen"), tr ("Leertaste"), piece != nullptr));
+        m.addItem (item (11, tr ("Stopp"), {}, piece != nullptr));
+        m.addItem (item (12, tr ("Zum Anfang"), {}, piece != nullptr));
+        m.addItem (item (13, tr ("Stück in Schleife"), {}, true, proc.getLoop()));
         m.addSeparator();
-        m.addItem (item (14, "Registrierung hier merken", "R", piece != nullptr));
-        m.addItem (item (15, juce::String::fromUTF8 ("Registrierspur löschen"), {}, ! proc.getMarks().empty()));
+        m.addItem (item (14, tr ("Registrierung hier merken"), "R", piece != nullptr));
+        m.addItem (item (15, tr ("Registrierspur löschen"), {}, ! proc.getMarks().empty()));
         m.addSeparator();
-        m.addItem (item (16, "Registrierung aus der Datei beim Laden ziehen", {}, true, proc.applyFileRegistration));
-        m.addItem (item (17, "Werke ohne Register automatisch registrieren", {}, true, proc.autoRegister));
+        m.addItem (item (16, tr ("Registrierung aus der Datei beim Laden ziehen"), {}, true, proc.applyFileRegistration));
+        m.addItem (item (17, tr ("Werke ohne Register automatisch registrieren"), {}, true, proc.autoRegister));
     }
     else if (index == 2)
     {
-        m.addItem (item (20, juce::String::fromUTF8 ("Manual hinzufügen")));
-        m.addItem (item (21, juce::String::fromUTF8 ("Generalauslöser (alle Register ab)")));
-        m.addItem (item (22, juce::String::fromUTF8 ("Pfeifen räumlich aufstellen"), {}, true, proc.organ.spatial));
+        m.addItem (item (20, tr ("Manual hinzufügen")));
+        m.addItem (item (21, tr ("Generalauslöser (alle Register ab)")));
+        m.addItem (item (22, tr ("Pfeifen räumlich aufstellen"), {}, true, proc.organ.spatial));
         juce::PopupMenu transpose;
         for (int t = -6; t <= 6; ++t)
-            transpose.addItem (item (1000 + t, (t > 0 ? "+" : "") + juce::String (t) + juce::String::fromUTF8 (" Halbtöne"), {}, true, proc.organ.transpose == t));
-        m.addSubMenu ("Transposition", transpose);
+            transpose.addItem (item (1000 + t, (t > 0 ? "+" : "") + juce::String (t) + tr (" Halbtöne"), {}, true, proc.organ.transpose == t));
+        m.addSubMenu (tr ("Transposition"), transpose);
         m.addSeparator();
-        m.addItem (item (25, juce::String::fromUTF8 ("Orgel auf Standard zurücksetzen")));
-        m.addItem (item (26, juce::String::fromUTF8 ("Alle Töne aus (Panik)")));
+        m.addItem (item (25, tr ("Orgel auf Standard zurücksetzen")));
+        m.addItem (item (26, tr ("Alle Töne aus (Panik)")));
     }
     else if (index == 3)
     {
-        m.addItem (item (30, "Noten in Seitenbreite", {}, true, desk.isZoomed()));
-        m.addItem (item (31, juce::String::fromUTF8 ("Beim Abspielen mitblättern"), {}, true, desk.isFollowing()));
-        m.addItem (item (33, "Eigene Notensysteme je Manual", {}, true, proc.staffPerManual));
-        m.addItem (item (32, "Manuale in den Noten farbig", {}, true, proc.colourManuals));
+        m.addItem (item (30, tr ("Noten in Seitenbreite"), {}, true, desk.isZoomed()));
+        m.addItem (item (31, tr ("Beim Abspielen mitblättern"), {}, true, desk.isFollowing()));
+        m.addItem (item (33, tr ("Eigene Notensysteme je Manual"), {}, true, proc.staffPerManual));
+        m.addItem (item (32, tr ("Manuale in den Noten farbig"), {}, true, proc.colourManuals));
+        m.addSeparator();
+        m.addSubMenu (tr ("Sprache"), languageMenu (2000));
     }
     return m;
 }
 
+// Languages: the system's, or one chosen here (it applies from the next start).
+juce::PopupMenu OrgelEditor::languageMenu (int firstId)
+{
+    juce::PopupMenu m;
+    const auto chosen = i18n::setting();
+    m.addItem (firstId, tr ("Wie das System"), true, chosen == "auto");
+    m.addSeparator();
+    int id = firstId + 1;
+    for (auto& l : i18n::languages())
+        m.addItem (id++, juce::String::fromUTF8 (l.nativeName), true, chosen == l.code);
+    return m;
+}
+
+void OrgelEditor::chooseLanguage (int index)
+{
+    const auto& langs = i18n::languages();
+    const juce::String code = index <= 0 || index > (int) langs.size() ? juce::String ("auto") : juce::String (langs[(size_t) index - 1].code);
+    if (code == i18n::setting())
+        return;
+    i18n::setSetting (code);
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Orgelwerk",
+                                            tr ("Die Sprache wird beim nächsten Start von Orgelwerk übernommen."));
+    if (proc.isStandalone())
+        menuItemsChanged();
+}
+
 void OrgelEditor::menuItemSelected (int id, int)
 {
+    if (id >= 2000 && id < 2100)
+    {
+        chooseLanguage (id - 2000);
+        return;
+    }
     if (id >= 100 && id < 200)
     {
         auto formats = Formats::exportFormats();
@@ -1132,7 +1165,7 @@ void OrgelEditor::menuItemSelected (int id, int)
     {
         case 1: openFile(); break;
         case 2:
-            chooser = std::make_unique<juce::FileChooser> ("SoundFont laden", juce::File(), "*.sf2");
+            chooser = std::make_unique<juce::FileChooser> (tr ("SoundFont laden"), juce::File(), "*.sf2");
             chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
                 juce::String err;
                 if (fc.getResult().existsAsFile() && ! proc.loadSoundFont (fc.getResult(), err))
@@ -1172,32 +1205,32 @@ void OrgelEditor::showTrackMenu()
     juce::PopupMenu m;
     if (piece == nullptr)
     {
-        m.addItem (-1, juce::String::fromUTF8 ("Zuerst ein Stück laden"), false);
+        m.addItem (-1, tr ("Zuerst ein Stück laden"), false);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&trackButton));
         return;
     }
     auto marks = proc.getMarks();
     const auto here = piece->score->measureAt (proc.getCurrentBeat());
-    m.addItem (1, juce::String::fromUTF8 ("Aktuelle Registrierung hier merken (Takt ") + juce::String (here) + ")  [R]");
+    m.addItem (1, tr ("Aktuelle Registrierung hier merken (Takt ") + juce::String (here) + ")  [R]");
     m.addSeparator();
     if (marks.empty())
-        m.addItem (-1, "Noch keine Registrierwechsel", false);
+        m.addItem (-1, tr ("Noch keine Registrierwechsel"), false);
     for (int i = 0; i < (int) marks.size(); ++i)
     {
         auto& mk = marks[(size_t) i];
         const int stops = juce::StringArray::fromTokens (mk.combination.upToFirstOccurrenceOf (";", false, false), ",", "").size();
         juce::PopupMenu sub;
-        sub.addItem (100 + i, "Hierhin springen");
-        sub.addItem (2000 + i, "Mit aktueller Registrierung ersetzen");
-        sub.addItem (4000 + i, juce::String::fromUTF8 ("Löschen"));
-        m.addSubMenu ("Takt " + juce::String (piece->score->measureAt (mk.beat)) + "  ("
-                          + formatTime (piece->score->beatToSeconds (mk.beat)) + ")  -  " + juce::String (stops) + " Register",
+        sub.addItem (100 + i, tr ("Hierhin springen"));
+        sub.addItem (2000 + i, tr ("Mit aktueller Registrierung ersetzen"));
+        sub.addItem (4000 + i, tr ("Löschen"));
+        m.addSubMenu (tr ("Takt ") + juce::String (piece->score->measureAt (mk.beat)) + "  ("
+                          + formatTime (piece->score->beatToSeconds (mk.beat)) + ")  -  " + juce::String (stops) + tr (" Register"),
                       sub);
     }
     if (! marks.empty())
     {
         m.addSeparator();
-        m.addItem (9999, juce::String::fromUTF8 ("Alle Registrierwechsel löschen"));
+        m.addItem (9999, tr ("Alle Registrierwechsel löschen"));
     }
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&trackButton), [this, marks, piece] (int r) {
         if (r == 1) proc.addMarkHere();
@@ -1213,15 +1246,15 @@ void OrgelEditor::showSoundFontMenu()
 {
     juce::PopupMenu m;
     auto sf = proc.organ.getSoundFont();
-    m.addSectionHeader ("Aktuell: " + (sf ? sf->getName() : juce::String ("keine")) + " (" + juce::String (sf ? (int) sf->getPresets().size() : 0) + juce::String::fromUTF8 (" Klänge)"));
-    m.addItem (1, "Eingebaute Jeux14 verwenden");
-    m.addItem (2, juce::String::fromUTF8 ("SF2-Datei laden…"));
+    m.addSectionHeader (tr ("Aktuell: ") + (sf ? sf->getName() : juce::String ("keine")) + " (" + juce::String (sf ? (int) sf->getPresets().size() : 0) + tr (" Klänge)"));
+    m.addItem (1, tr ("Eingebaute Jeux14 verwenden"));
+    m.addItem (2, tr ("SF2-Datei laden…"));
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&soundFontButton), [this] (int r) {
         if (r == 1)
             proc.useBuiltInSoundFont();
         if (r == 2)
         {
-            chooser = std::make_unique<juce::FileChooser> ("SoundFont laden", juce::File(), "*.sf2");
+            chooser = std::make_unique<juce::FileChooser> (tr ("SoundFont laden"), juce::File(), "*.sf2");
             chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
                 if (! fc.getResult().existsAsFile())
                     return;
@@ -1237,24 +1270,26 @@ void OrgelEditor::showOptionsMenu()
 {
     juce::PopupMenu m;
     if (proc.isStandalone())
-        m.addItem (1, juce::String::fromUTF8 ("Audio-Einstellungen…"));
+        m.addItem (1, tr ("Audio-Einstellungen…"));
     else
-        m.addItem (2, "Mit DAW-Transport mitlaufen", true, proc.hostSync);
-    m.addItem (3, juce::String::fromUTF8 ("Stück in Schleife abspielen"), true, proc.getLoop());
+        m.addItem (2, tr ("Mit DAW-Transport mitlaufen"), true, proc.hostSync);
+    m.addItem (3, tr ("Stück in Schleife abspielen"), true, proc.getLoop());
     juce::PopupMenu transpose;
     for (int t = -6; t <= 6; ++t)
-        transpose.addItem (1000 + t, (t > 0 ? "+" : "") + juce::String (t) + juce::String::fromUTF8 (" Halbtöne"), true, proc.organ.transpose == t);
-    m.addSubMenu ("Transposition", transpose);
-    m.addItem (6, juce::String::fromUTF8 ("Pfeifen räumlich aufstellen (Werke im Raum, C/Cis-Seiten)"), true, proc.organ.spatial);
-    m.addItem (8, "Eigene Notensysteme je Manual", true, proc.staffPerManual);
-    m.addItem (9, "Werke ohne Register automatisch registrieren", true, proc.autoRegister);
-    m.addItem (7, "Manuale in den Noten farbig", true, proc.colourManuals);
+        transpose.addItem (1000 + t, (t > 0 ? "+" : "") + juce::String (t) + tr (" Halbtöne"), true, proc.organ.transpose == t);
+    m.addSubMenu (tr ("Transposition"), transpose);
+    m.addItem (6, tr ("Pfeifen räumlich aufstellen (Werke im Raum, C/Cis-Seiten)"), true, proc.organ.spatial);
+    m.addItem (8, tr ("Eigene Notensysteme je Manual"), true, proc.staffPerManual);
+    m.addItem (9, tr ("Werke ohne Register automatisch registrieren"), true, proc.autoRegister);
+    m.addItem (7, tr ("Manuale in den Noten farbig"), true, proc.colourManuals);
     m.addSeparator();
-    m.addItem (4, juce::String::fromUTF8 ("Orgel auf Standard zurücksetzen"));
-    m.addItem (5, juce::String::fromUTF8 ("Alle Töne aus (Panik)"));
+    m.addItem (4, tr ("Orgel auf Standard zurücksetzen"));
+    m.addItem (5, tr ("Alle Töne aus (Panik)"));
+    m.addSeparator();
+    m.addSubMenu (tr ("Sprache"), languageMenu (3000));
     m.addSeparator();
     auto ms = Formats::findMuseScore();
-    m.addItem (-1, ms.existsAsFile() ? juce::String::fromUTF8 ("MuseScore gefunden: weitere Formate verfügbar") : juce::String::fromUTF8 ("MuseScore nicht gefunden (für .mscz, Guitar Pro, Capella …)"), false);
+    m.addItem (-1, ms.existsAsFile() ? tr ("MuseScore gefunden: weitere Formate verfügbar") : tr ("MuseScore nicht gefunden (für .mscz, Guitar Pro, Capella …)"), false);
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&optionsButton), [this] (int r) {
         if (r == 1)
@@ -1284,6 +1319,8 @@ void OrgelEditor::showOptionsMenu()
         }
         if (r >= 994 && r <= 1006)
             proc.organ.setTranspose (r - 1000);
+        if (r >= 3000 && r < 3100)
+            chooseLanguage (r - 3000);
     });
 }
 } // namespace orgel

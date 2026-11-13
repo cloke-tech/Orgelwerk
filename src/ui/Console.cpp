@@ -21,8 +21,8 @@ void StopKnob::refresh()
     name = st.name;
     family = classifyStop (name);
     setTitle (name);
-    setDescription (on ? "gezogen" : "abgestossen");
-    setTooltip (name + "  (SF2 Bank " + juce::String (st.bank) + ", Programm " + juce::String (st.program) + ")\nRechtsklick: verschieben/entfernen");
+    setDescription (on ? tr ("gezogen") : tr ("abgestoßen"));
+    setTooltip (name + tr ("  (SF2 Bank ") + juce::String (st.bank) + tr (", Programm ") + juce::String (st.program) + tr (")\nRechtsklick: verschieben/entfernen"));
     if (changed)
         repaint();
 }
@@ -117,10 +117,10 @@ void StopKnob::mouseDown (const juce::MouseEvent& e)
     {
         juce::PopupMenu m;
         m.addSectionHeader (name);
-        m.addItem (1, "Nach vorne");
-        m.addItem (2, "Nach hinten");
+        m.addItem (1, tr ("Nach vorne"));
+        m.addItem (2, tr ("Nach hinten"));
         m.addSeparator();
-        m.addItem (3, "Register entfernen");
+        m.addItem (3, tr ("Register entfernen"));
         juce::Component::SafePointer<StopKnob> safe (this);
         auto& p = proc;
         const int d = division, s = stop;
@@ -138,7 +138,7 @@ void StopKnob::mouseDown (const juce::MouseEvent& e)
 //==============================================================================
 AddStopButton::AddStopButton (OrgelProcessor& p, int d) : proc (p), division (d)
 {
-    setTooltip (juce::String::fromUTF8 ("Register aus der SoundFont hinzufügen"));
+    setTooltip (tr ("Register aus der SoundFont hinzufügen"));
 }
 
 void AddStopButton::paint (juce::Graphics& g)
@@ -170,12 +170,12 @@ void AddStopButton::showPresetMenu (OrgelProcessor& p, int division, juce::Compo
     {
         juce::PopupMenu bm;
         for (auto& [chunk, sub] : c)
-            bm.addSubMenu ("Programm " + juce::String (chunk * 32) + juce::String::fromUTF8 ("–") + juce::String (chunk * 32 + 31), sub);
-        menu.addSubMenu ("Bank " + juce::String (bank), bm);
+            bm.addSubMenu (tr ("Programm ") + juce::String (chunk * 32) + juce::String::fromUTF8 ("–") + juce::String (chunk * 32 + 31), sub);
+        menu.addSubMenu (tr ("Bank ") + juce::String (bank), bm);
     }
     // also by stop family, which is how organists think
     juce::PopupMenu families;
-    const juce::String familyNames[] = { "Prinzipale", juce::String::fromUTF8 ("Flöten"), "Streicher", "Mixturen & Aliquoten", "Zungen", "Glocken & Effekte" };
+    const juce::String familyNames[] = { tr ("Prinzipale"), tr ("Flöten"), tr ("Streicher"), tr ("Mixturen & Aliquoten"), tr ("Zungen"), tr ("Glocken & Effekte") };
     for (int f = 0; f < 6; ++f)
     {
         juce::PopupMenu fm;
@@ -185,7 +185,7 @@ void AddStopButton::showPresetMenu (OrgelProcessor& p, int division, juce::Compo
         families.addSubMenu (familyNames[f], fm);
     }
     menu.addSeparator();
-    menu.addSubMenu ("Nach Registerfamilie", families);
+    menu.addSubMenu (tr ("Nach Registerfamilie"), families);
 
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target), [&p, division, sf] (int r) {
         if (r <= 0)
@@ -197,7 +197,7 @@ void AddStopButton::showPresetMenu (OrgelProcessor& p, int division, juce::Compo
 
 std::unique_ptr<juce::AccessibilityHandler> AddStopButton::createAccessibilityHandler()
 {
-    setTitle (juce::String::fromUTF8 ("Register hinzufügen"));
+    setTitle (tr ("Register hinzufügen"));
     return std::make_unique<juce::AccessibilityHandler> (*this, juce::AccessibilityRole::button,
         juce::AccessibilityActions().addAction (juce::AccessibilityActionType::press, [this] { showPresetMenu (proc, division, this); }));
 }
@@ -324,18 +324,18 @@ CouplerRail::CouplerRail (OrgelProcessor& p) : proc (p)
 {
     setBufferedToImage (true);
     setButton = std::make_unique<Tab> ("S");
-    setButton->setTooltip (juce::String::fromUTF8 ("Setzer: S drücken, dann eine Nummer, um die aktuelle Registrierung zu speichern"));
+    setButton->setTooltip (tr ("Setzer: S drücken, dann eine Nummer, um die aktuelle Registrierung zu speichern"));
     setButton->setClickingTogglesState (true);
     setButton->onColour = juce::Colour (0xff2a6ab3);
     addAndMakeVisible (*setButton);
     zeroButton = std::make_unique<Tab> ("0");
-    zeroButton->setTooltip (juce::String::fromUTF8 ("Generalauslöser: alle Register und Koppeln ab"));
+    zeroButton->setTooltip (tr ("Generalauslöser: alle Register und Koppeln ab"));
     zeroButton->onClick = [this] { proc.organ.clearRegistration(); };
     addAndMakeVisible (*zeroButton);
     for (int i = 0; i < 8; ++i)
     {
         auto* t = pistons.add (new Tab (juce::String (i + 1)));
-        t->setTooltip ("Kombination " + juce::String (i + 1) + " abrufen (mit S: speichern)");
+        t->setTooltip (tr ("Kombination ") + juce::String (i + 1) + tr (" abrufen (mit S: speichern)"));
         t->onClick = [this, i] {
             if (setButton->getToggleState())
             {
@@ -359,8 +359,8 @@ void CouplerRail::rebuild()
     for (int i = 0; i < (int) cs.size(); ++i)
     {
         auto* t = couplers.add (new Tab (proc.organ.couplerName (cs[(size_t) i])));
-        t->setTooltip ("Koppel " + proc.organ.couplerName (cs[(size_t) i]) + ": "
-                       + proc.organ.getDivision (cs[(size_t) i].from).name + " spielt auf " + proc.organ.getDivision (cs[(size_t) i].to).name + " mit");
+        t->setTooltip (tr ("Koppel ") + proc.organ.couplerName (cs[(size_t) i]) + ": "
+                       + proc.organ.getDivision (cs[(size_t) i].from).name + tr (" spielt auf ") + proc.organ.getDivision (cs[(size_t) i].to).name + tr (" mit"));
         t->setToggleState (cs[(size_t) i].on, juce::dontSendNotification);
         t->onClick = [this, i] {
             bool now = false;
@@ -379,9 +379,9 @@ void CouplerRail::rebuild()
     {
         if (proc.organ.getDivision (d).pedal)
             continue;
-        auto* t = tremulants.add (new Tab ("Trem. " + romanNumeral (d + 1)));
+        auto* t = tremulants.add (new Tab (tr ("Trem. ") + romanNumeral (d + 1)));
         t->onColour = juce::Colour (0xff2a6ab3);
-        t->setTooltip ("Tremulant " + proc.organ.getDivision (d).name);
+        t->setTooltip (tr ("Tremulant ") + proc.organ.getDivision (d).name);
         t->setToggleState (proc.organ.getDivision (d).tremulant, juce::dontSendNotification);
         t->onClick = [this, d] {
             bool now = false;
@@ -580,7 +580,7 @@ void KeyboardView::mouseUp (const juce::MouseEvent&)
 DivisionPlate::DivisionPlate (OrgelProcessor& p, int d) : division (d), proc (p)
 {
     setBufferedToImage (true);
-    setTooltip (juce::String::fromUTF8 ("Klicken: Name, MIDI-Eingang und Kanal, Lautstärke"));
+    setTooltip (tr ("Klicken: Name, MIDI-Eingang und Kanal, Lautstärke"));
 }
 
 DivisionPlate::Texts DivisionPlate::texts() const
@@ -595,12 +595,12 @@ DivisionPlate::Texts DivisionPlate::texts() const
     t.learning = proc.getMidiLearnDivision() == division;
     t.title = d.pedal ? d.name : romanNumeral (division + 1) + "  " + d.name;
     if (t.learning)
-        t.midi = juce::String::fromUTF8 ("Taste drücken…");
+        t.midi = tr ("Taste drücken…");
     else
     {
-        auto dev = d.midi.device.isEmpty() ? juce::String (juce::String::fromUTF8 ("Alle Eingänge"))
+        auto dev = d.midi.device.isEmpty() ? juce::String (tr ("Alle Eingänge"))
                                            : (d.midi.device == MidiAssign::hostDevice ? juce::String ("DAW") : d.midi.deviceName);
-        t.midi = dev + juce::String::fromUTF8 (" · ") + (d.midi.channel == 0 ? juce::String ("Omni") : "Kanal " + juce::String (d.midi.channel));
+        t.midi = dev + juce::String::fromUTF8 (" · ") + (d.midi.channel == 0 ? juce::String ("Omni") : tr ("Kanal ") + juce::String (d.midi.channel));
     }
     return t;
 }
@@ -662,7 +662,7 @@ std::unique_ptr<juce::AccessibilityHandler> DivisionPlate::createAccessibilityHa
     {
         const juce::ScopedLock sl (proc.organ.getLock());
         if (division < proc.organ.getNumDivisions())
-            setTitle (proc.organ.getDivision (division).name + " Einstellungen");
+            setTitle (proc.organ.getDivision (division).name + tr (" Einstellungen"));
     }
     return std::make_unique<juce::AccessibilityHandler> (*this, juce::AccessibilityRole::button,
         juce::AccessibilityActions().addAction (juce::AccessibilityActionType::press, [this] { openSettings(); }));
@@ -682,9 +682,9 @@ DivisionSettings::DivisionSettings (OrgelProcessor& p, int d) : proc (p), divisi
         name.setText (div.name, false);
         volume.setRange (0.0, 1.5, 0.01);
         volume.setValue (div.volume, juce::dontSendNotification);
-        channel.addItem (juce::String::fromUTF8 ("Omni (alle Kanäle)"), 1);
+        channel.addItem (tr ("Omni (alle Kanäle)"), 1);
         for (int c = 1; c <= 16; ++c)
-            channel.addItem ("Kanal " + juce::String (c), c + 1);
+            channel.addItem (tr ("Kanal ") + juce::String (c), c + 1);
         channel.setSelectedId (div.midi.channel + 1, juce::dontSendNotification);
         remove.setEnabled (! div.pedal && proc.organ.getNumManuals() > 1);
     }
@@ -693,7 +693,7 @@ DivisionSettings::DivisionSettings (OrgelProcessor& p, int d) : proc (p), divisi
     name.onReturnKey = name.onFocusLost = [this] { proc.organ.renameDivision (division, name.getText()); };
     device.onChange = channel.onChange = [this] { applyMidi(); };
     volume.onValueChange = [this] { proc.organ.setDivisionVolume (division, (float) volume.getValue()); };
-    learn.onClick = [this] { proc.startMidiLearn (division); learn.setButtonText (juce::String::fromUTF8 ("Taste am Gerät drücken…")); };
+    learn.onClick = [this] { proc.startMidiLearn (division); learn.setButtonText (tr ("Taste am Gerät drücken…")); };
     addStop.onClick = [this] { AddStopButton::showPresetMenu (proc, division, &addStop); };
     allOff.onClick = [this] {
         const int n = (int) proc.organ.getDivision (division).stops.size();
@@ -716,11 +716,11 @@ void DivisionSettings::fillDevices()
 {
     device.clear (juce::dontSendNotification);
     deviceIds = { MidiAssign::anyDevice };
-    deviceNames = { juce::String::fromUTF8 ("Alle Eingänge") };
+    deviceNames = { tr ("Alle Eingänge") };
     if (! proc.isStandalone())
     {
         deviceIds.add (MidiAssign::hostDevice);
-        deviceNames.add ("DAW / Host");
+        deviceNames.add (tr ("DAW / Host"));
     }
     else
         for (auto& info : proc.getMidiRouter().connectedDevices())
@@ -736,7 +736,7 @@ void DivisionSettings::fillDevices()
     if (! deviceIds.contains (current.device))
     {
         deviceIds.add (current.device);
-        deviceNames.add (current.deviceName + " (nicht verbunden)");
+        deviceNames.add (current.deviceName + tr (" (nicht verbunden)"));
     }
     for (int i = 0; i < deviceIds.size(); ++i)
         device.addItem (deviceNames[i], i + 1);
@@ -748,16 +748,16 @@ void DivisionSettings::applyMidi()
     MidiAssign a;
     const int i = device.getSelectedId() - 1;
     a.device = deviceIds[i];
-    a.deviceName = deviceNames[i].upToFirstOccurrenceOf (" (nicht verbunden)", false, false);
+    a.deviceName = deviceNames[i].upToFirstOccurrenceOf (tr (" (nicht verbunden)"), false, false);
     a.channel = juce::jmax (0, channel.getSelectedId() - 1);
     proc.organ.setMidiAssign (division, a);
 }
 
 void DivisionSettings::timerCallback()
 {
-    if (proc.getMidiLearnDivision() != division && learn.getButtonText() != "MIDI lernen")
+    if (proc.getMidiLearnDivision() != division && learn.getButtonText() != tr ("MIDI lernen"))
     {
-        learn.setButtonText ("MIDI lernen");
+        learn.setButtonText (tr ("MIDI lernen"));
         fillDevices();
         const juce::ScopedLock sl (proc.organ.getLock());
         channel.setSelectedId (proc.organ.getDivision (division).midi.channel + 1, juce::dontSendNotification);

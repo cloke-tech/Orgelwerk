@@ -57,6 +57,11 @@ add_custom_target(verovio_data_zip DEPENDS ${VRV_ZIP})
 
 juce_add_binary_data(OrgelData SOURCES
     resources/Jeux14.sf2
+    resources/lang/en.json
+    resources/lang/fr.json
+    resources/lang/es.json
+    resources/lang/it.json
+    resources/lang/nl.json
     ${VRV_ZIP})
 add_dependencies(OrgelData verovio_data_zip)
 
