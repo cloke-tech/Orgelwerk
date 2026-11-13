@@ -342,7 +342,8 @@ void MusicDesk::paintLine (juce::Graphics& g)
         requestTile (i, phys);
     // drop tiles far away
     for (auto it = tiles.begin(); it != tiles.end();)
-        it = (it->first < first - 3 || it->first > last + 6) ? tiles.erase (it) : std::next (it);
+        // (the first tile stays: the header at the left edge is drawn from it)
+        it = (it->first != 0 && (it->first < first - 3 || it->first > last + 6)) ? tiles.erase (it) : std::next (it);
     drawLineHeader (g, r, phys);
     drawCursor (g);
 }
@@ -367,7 +368,12 @@ void MusicDesk::drawLineHeader (juce::Graphics& g, juce::Rectangle<float> r, flo
         float signsRight = std::numeric_limits<float>::lowest();
         for (auto& id : firstBarSigns)
             if (auto d = line->ids.find (id); d != line->ids.end())
-                signsRight = juce::jmax (signsRight, elementArea (*line, d->second, r).getRight());
+            {
+                // an empty group (a key without sharps or flats) draws nothing and has no place
+                const auto area = elementArea (*line, d->second, r);
+                if (! area.isEmpty() && std::isfinite (area.getRight()))
+                    signsRight = juce::jmax (signsRight, area.getRight());
+            }
         if (signsRight > r.getX())
             headerFraction = (signsRight + 5.0f - r.getX()) / r.getWidth();
         for (auto& sid : lineNotation->getSystemIds (0))
@@ -385,7 +391,7 @@ void MusicDesk::drawLineHeader (juce::Graphics& g, juce::Rectangle<float> r, flo
                                          m.getWidth() / r.getWidth(), m.getHeight() / r.getHeight() });
             }
     }
-    if (lineX < 0.5 || headerFraction <= 0.0f)
+    if (lineX < 0.5 || ! (headerFraction > 0.0f && headerFraction < 0.5f))
         return;
     if (! headerImage.isValid())
     {
