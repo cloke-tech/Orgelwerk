@@ -94,6 +94,7 @@ private:
     float headerFraction = -1.0f; // its width as a part of the line (-1: not worked out yet)
     juce::Range<float> headerRows { 0.0f, 1.0f }; // the staves (without tempo marks above), as parts of the height
     std::vector<juce::String> firstBarMarks;            // tempo and texts of the first bar: left out of the header
+    std::vector<juce::String> firstBarSigns;            // clefs, key and time signatures: the header ends after them
     std::vector<juce::Rectangle<float>> headerMasks;    // where they are, as parts of the line's size
     void drawLineHeader (juce::Graphics& g, juce::Rectangle<float> r, float phys);
     std::shared_ptr<Notation> shownNotation() const;

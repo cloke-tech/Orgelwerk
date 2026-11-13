@@ -216,6 +216,7 @@ void MusicDesk::prepareLine()
     headerFraction = -1.0f;
     headerMasks.clear();
     firstBarMarks.clear();
+    firstBarSigns.clear();
     const int gen = ++lineGeneration;
     resetFollowState();
     juce::Component::SafePointer<MusicDesk> safe (this);
@@ -223,7 +224,7 @@ void MusicDesk::prepareLine()
         const auto svg = n->getPageSVG (0);
         auto page = std::make_shared<Page>();
         std::shared_ptr<juce::Drawable> forTiles;
-        std::vector<juce::String> marks;
+        std::vector<juce::String> marks, signs;
         if (auto xml = juce::parseXML (svg))
         {
             // tempo, texts and dynamics of the first bar (the header at the left edge leaves them out)
@@ -239,6 +240,8 @@ void MusicDesk::prepareLine()
                 const auto cls = e.getStringAttribute ("class");
                 if (cls == "tempo" || cls == "dir" || cls == "dynam" || cls == "reh" || cls == "harm")
                     marks.push_back (e.getStringAttribute ("id"));
+                else if (cls == "clef" || cls == "keySig" || cls == "meterSig" || cls == "meterSigGrp" || cls == "mensur")
+                    signs.push_back (e.getStringAttribute ("id"));
                 else
                     for (auto* c : e.getChildIterator())
                         collect (*c);
@@ -260,10 +263,11 @@ void MusicDesk::prepareLine()
             walk (page->drawable.get());
             page->bounds = page->drawable->getDrawableBounds();
         }
-        juce::MessageManager::callAsync ([safe, page, forTiles, gen, marks] {
+        juce::MessageManager::callAsync ([safe, page, forTiles, gen, marks, signs] {
             if (safe == nullptr || gen != safe->lineGeneration || page->drawable == nullptr)
                 return;
             safe->firstBarMarks = marks;
+            safe->firstBarSigns = signs;
             safe->line = std::make_unique<Page> (std::move (*page));
             safe->tileDrawable = forTiles;
             safe->updateNav();
@@ -359,6 +363,13 @@ void MusicDesk::drawLineHeader (juce::Graphics& g, juce::Rectangle<float> r, flo
                 headerFraction = juce::jmax (0.0f, (note.getX() - note.getHeight() * 0.8f - 2.0f - r.getX()) / r.getWidth());
                 break;
             }
+        // better: just after the clefs, key and time signatures (however many accidentals there are)
+        float signsRight = std::numeric_limits<float>::lowest();
+        for (auto& id : firstBarSigns)
+            if (auto d = line->ids.find (id); d != line->ids.end())
+                signsRight = juce::jmax (signsRight, elementArea (*line, d->second, r).getRight());
+        if (signsRight > r.getX())
+            headerFraction = (signsRight + 5.0f - r.getX()) / r.getWidth();
         for (auto& sid : lineNotation->getSystemIds (0))
             if (auto d = line->ids.find (sid); d != line->ids.end())
             {
