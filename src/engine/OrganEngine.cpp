@@ -159,47 +159,147 @@ void OrganEngine::prepare (double sr, int maxBlockSize)
     reverbSmoothed.setCurrentAndTargetValue (reverb);
     masterSmoothed.setCurrentAndTargetValue (master);
     dspPrepared = true;
+    updateToneFilters();
     buildImpulseResponse();
 }
 
-// A synthetic church: diffuse stereo tail of about 3.5 s that gets darker as it decays,
-// with a few early reflections. Generated here so no impulse-response file is needed.
+// The rooms: reverb time, delay before the first reflections, size (spacing of the early
+// reflections) and how quickly the treble dies away.
+struct RoomSpec
+{
+    double rt60, preDelay, size, darkening;
+};
+static const RoomSpec roomSpecs[] = {
+    { 1.6, 0.008, 0.45, 0.45 }, // chapel
+    { 2.6, 0.015, 0.70, 0.65 }, // village church
+    { 3.6, 0.022, 1.00, 0.90 }, // town church
+    { 5.5, 0.032, 1.50, 1.25 }, // cathedral
+    { 8.0, 0.045, 2.10, 1.70 }, // minster
+};
+
+// A synthetic church: a diffuse stereo tail that gets darker as it decays, with early
+// reflections spaced by the size of the room. The bass rings on longer than the treble, as
+// in real stone churches (more so with more bass), which is what makes the low notes fill
+// the room. Generated here so no impulse-response file is needed.
 void OrganEngine::buildImpulseResponse()
 {
     const double sr = sampleRate;
-    const double rt60 = 3.6;
-    const int length = (int) (sr * 4.2);
+    const auto& room = roomSpecs[juce::jlimit (0, numRooms() - 1, acoustics.room)];
+    const double rt60 = room.rt60;
+    const double rtLow = rt60 * (1.15 + 0.6 * acoustics.bass);
+    const int preDelay = (int) (room.preDelay * sr);
+    const int length = preDelay + (int) (sr * (juce::jmax (rt60, rtLow) * 1.05 + 0.3));
     juce::AudioBuffer<float> ir (2, length);
     ir.clear();
     juce::Random rnd (4711);
-    const int preDelay = (int) (0.022 * sr);
+    const float lowCoeff = (float) (1.0 - std::exp (-juce::MathConstants<double>::twoPi * 160.0 / sr));
+    const float lowMix = (float) (0.6 + 0.9 * acoustics.bass);
     for (int ch = 0; ch < 2; ++ch)
     {
         auto* d = ir.getWritePointer (ch);
-        float lp = 0.0f;
+        float lp = 0.0f, low = 0.0f;
         for (int i = preDelay; i < length; ++i)
         {
             const double t = (i - preDelay) / sr;
             const float env = (float) std::exp (-6.907755 * t / rt60);
-            // the tail loses treble over time: lowpass coefficient falls from ~0.9 to ~0.15
-            const float coeff = (float) juce::jmap (std::exp (-t / 0.9), 0.0, 1.0, 0.15, 0.9);
+            const float envLow = (float) std::exp (-6.907755 * t / rtLow);
+            // the tail loses treble over time (faster in small rooms)
+            const float coeff = (float) juce::jmap (std::exp (-t / room.darkening), 0.0, 1.0, 0.15, 0.9);
             const float noise = rnd.nextFloat() * 2.0f - 1.0f;
             lp += coeff * (noise - lp);
+            low += lowCoeff * (noise - low);
             // soft onset so the tail builds up like in a large room
-            const float build = (float) juce::jmin (1.0, t / 0.08);
-            d[i] = lp * env * build;
+            const float build = (float) juce::jmin (1.0, t / (0.05 + 0.04 * room.size));
+            d[i] = (lp * env + low * envLow * lowMix * 3.0f) * build;
         }
-        // early reflections
-        const double taps[] = { 0.011, 0.019, 0.027, 0.034, 0.046, 0.058, 0.071 };
-        for (int k = 0; k < 7; ++k)
+        // early reflections from walls and vaults, further apart in bigger rooms
+        const double taps[] = { 0.011, 0.019, 0.027, 0.034, 0.046, 0.058, 0.071, 0.089 };
+        for (int k = 0; k < 8; ++k)
         {
-            const int pos = preDelay + (int) ((taps[k] + (ch ? 0.0031 * k : 0.0)) * sr);
+            const int pos = preDelay + (int) ((taps[k] * room.size + (ch ? 0.0031 * k : 0.0)) * sr);
             if (pos < length)
                 d[pos] += (0.5f - 0.05f * k) * (k % 2 ? -1.0f : 1.0f);
         }
     }
+    builtRoom = acoustics.room;
+    builtBass = acoustics.bass;
     convolution.loadImpulseResponse (std::move (ir), sr, juce::dsp::Convolution::Stereo::yes,
                                      juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::yes);
+}
+
+// Filters for the sound settings (RBJ cookbook), worked out whenever a setting changes.
+void OrganEngine::updateToneFilters()
+{
+    const double sr = sampleRate;
+    auto shelf = [sr] (double f, double gainDb, bool low) {
+        Biquad b;
+        const double A = std::pow (10.0, gainDb / 40.0), w = juce::MathConstants<double>::twoPi * f / sr;
+        const double cw = std::cos (w), alpha = std::sin (w) / 2.0 * std::sqrt (2.0), sA = 2.0 * std::sqrt (A) * alpha;
+        double b0, b1, b2, a0, a1, a2;
+        if (low)
+        {
+            b0 = A * ((A + 1) - (A - 1) * cw + sA); b1 = 2 * A * ((A - 1) - (A + 1) * cw); b2 = A * ((A + 1) - (A - 1) * cw - sA);
+            a0 = (A + 1) + (A - 1) * cw + sA; a1 = -2 * ((A - 1) + (A + 1) * cw); a2 = (A + 1) + (A - 1) * cw - sA;
+        }
+        else
+        {
+            b0 = A * ((A + 1) + (A - 1) * cw + sA); b1 = -2 * A * ((A - 1) + (A + 1) * cw); b2 = A * ((A + 1) + (A - 1) * cw - sA);
+            a0 = (A + 1) - (A - 1) * cw + sA; a1 = 2 * ((A - 1) - (A + 1) * cw); a2 = (A + 1) - (A - 1) * cw - sA;
+        }
+        b.b0 = (float) (b0 / a0); b.b1 = (float) (b1 / a0); b.b2 = (float) (b2 / a0); b.a1 = (float) (a1 / a0); b.a2 = (float) (a2 / a0);
+        return b;
+    };
+    auto lowPass = [sr] (double f, double q) {
+        Biquad b;
+        const double w = juce::MathConstants<double>::twoPi * f / sr, cw = std::cos (w), alpha = std::sin (w) / (2.0 * q);
+        const double a0 = 1 + alpha;
+        b.b0 = (float) ((1 - cw) / 2 / a0); b.b1 = (float) ((1 - cw) / a0); b.b2 = b.b0;
+        b.a1 = (float) (-2 * cw / a0); b.a2 = (float) ((1 - alpha) / a0);
+        return b;
+    };
+    auto bandPass = [sr] (double f, double q) {
+        Biquad b;
+        const double w = juce::MathConstants<double>::twoPi * f / sr, cw = std::cos (w), alpha = std::sin (w) / (2.0 * q);
+        const double a0 = 1 + alpha;
+        b.b0 = (float) (alpha / a0); b.b1 = 0; b.b2 = (float) (-alpha / a0);
+        b.a1 = (float) (-2 * cw / a0); b.a2 = (float) ((1 - alpha) / a0);
+        return b;
+    };
+    const auto& a = acoustics;
+    bassShelf.setCoefficients (shelf (180.0, a.bass * 12.0, true));
+    subShelf.setCoefficients (shelf (45.0, a.sub * 12.0, true));
+    trebleShelf.setCoefficients (shelf (4000.0, (a.treble - 0.5) * 14.0, false));
+    harmonicLow.setCoefficients (lowPass (90.0, 0.707));
+    harmonicBand.setCoefficients (bandPass (150.0, 0.8));
+    // the treble is lost on the way through the nave
+    distanceShelf.setCoefficients (shelf (3000.0, -14.0 * a.distance, false));
+    harmonicGain = a.sub * 0.9f;
+    widthFactor = a.width < 0.5f ? 0.5f + a.width : 1.0f + (a.width - 0.5f) * 2.0f;
+    dryFactor = 1.0f - 0.55f * a.distance;
+    wetFactor = 0.55f + 1.1f * a.distance;
+}
+
+OrganEngine::Acoustics OrganEngine::getAcoustics() const
+{
+    const juce::ScopedLock sl (lock);
+    return acoustics;
+}
+
+void OrganEngine::setAcoustics (const Acoustics& a)
+{
+    bool rebuild = false;
+    {
+        const juce::ScopedLock sl (lock);
+        if (a == acoustics)
+            return;
+        acoustics = a;
+        updateToneFilters();
+        // a new room (or a clearly different bass) needs a new reverb tail
+        rebuild = dspPrepared && (a.room != builtRoom || std::abs (a.bass - builtBass) > 0.08f);
+    }
+    if (rebuild)
+        buildImpulseResponse();
+    sendChangeMessage();
 }
 
 int OrganEngine::activeVoiceCount() const
@@ -342,12 +442,32 @@ void OrganEngine::renderLocked (juce::AudioBuffer<float>& out, const std::vector
         for (int i = 0; i < numSamples; ++i)
         {
             const float rv = reverbSmoothed.getNextValue();
-            const float dry = 1.0f - 0.3f * rv, wetGain = 0.75f * rv;
+            // further from the organ: less direct sound (and less treble in it), more room
+            const float dry = (1.0f - 0.3f * rv) * dryFactor, wetGain = 0.75f * rv * wetFactor;
             for (int ch = 0; ch < 2; ++ch)
             {
                 auto* o = out.getWritePointer (ch);
-                o[i] = o[i] * dry + wet.getReadPointer (ch)[i] * wetGain;
+                o[i] = distanceShelf.process (o[i] * dry + wet.getReadPointer (ch)[i] * wetGain, ch);
             }
+        }
+        // the sound settings: width, bass, the deep range with its overtones, brilliance
+        auto* l = out.getWritePointer (0);
+        auto* r = out.getWritePointer (1);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float mid = 0.5f * (l[i] + r[i]), side = 0.5f * (l[i] - r[i]) * widthFactor;
+            float x[2] = { mid + side, mid - side };
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                float y = bassShelf.process (x[ch], ch);
+                y = subShelf.process (y, ch);
+                // overtones of the deepest notes, so they can be felt on small speakers too
+                const float low = harmonicLow.process (y, ch);
+                y += harmonicBand.process (std::abs (low), ch) * harmonicGain;
+                x[ch] = trebleShelf.process (y, ch);
+            }
+            l[i] = x[0];
+            r[i] = x[1];
         }
     }
 
@@ -1213,6 +1333,12 @@ std::unique_ptr<juce::XmlElement> OrganEngine::toXml() const
     xml->setAttribute ("master", master);
     xml->setAttribute ("transpose", transpose);
     xml->setAttribute ("spatial", spatial);
+    xml->setAttribute ("room", acoustics.room);
+    xml->setAttribute ("distance", acoustics.distance);
+    xml->setAttribute ("bass", acoustics.bass);
+    xml->setAttribute ("sub", acoustics.sub);
+    xml->setAttribute ("width", acoustics.width);
+    xml->setAttribute ("treble", acoustics.treble);
     for (auto& d : divisions)
     {
         auto* e = xml->createNewChildElement ("Division");
@@ -1259,6 +1385,14 @@ void OrganEngine::fromXml (const juce::XmlElement& xml)
         master = (float) xml.getDoubleAttribute ("master", 0.75);
         transpose = xml.getIntAttribute ("transpose", 0);
         spatial = xml.getBoolAttribute ("spatial", true);
+        Acoustics a;
+        acoustics.room = juce::jlimit (0, numRooms() - 1, xml.getIntAttribute ("room", a.room));
+        acoustics.distance = (float) xml.getDoubleAttribute ("distance", a.distance);
+        acoustics.bass = (float) xml.getDoubleAttribute ("bass", a.bass);
+        acoustics.sub = (float) xml.getDoubleAttribute ("sub", a.sub);
+        acoustics.width = (float) xml.getDoubleAttribute ("width", a.width);
+        acoustics.treble = (float) xml.getDoubleAttribute ("treble", a.treble);
+        updateToneFilters();
 
         for (auto* e : xml.getChildWithTagNameIterator ("Division"))
         {
@@ -1309,6 +1443,9 @@ void OrganEngine::fromXml (const juce::XmlElement& xml)
                 if (c.from == e->getIntAttribute ("from") && c.to == e->getIntAttribute ("to"))
                     c.on = e->getBoolAttribute ("on");
     }
+    // another room (or bass) than the reverb was made for
+    if (dspPrepared && (acoustics.room != builtRoom || std::abs (acoustics.bass - builtBass) > 0.08f))
+        buildImpulseResponse();
     sendChangeMessage();
 }
 

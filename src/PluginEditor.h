@@ -3,6 +3,7 @@
 #include "engine/I18n.h"
 #include "ui/Console.h"
 #include "ui/MusicDesk.h"
+#include "ui/SoundPanel.h"
 #include <set>
 
 namespace orgel
@@ -96,6 +97,8 @@ private:
     juce::TextButton openButton { tr ("Öffnen…") }, exportButton { tr ("Exportieren") }, rewindButton, playButton, stopButton,
         partsButton { tr ("Stimmen") }, addManualButton { "+ Manual" }, soundFontButton { "SoundFont" }, optionsButton { tr ("Optionen") };
     juce::TextButton trackButton { tr ("Registrierspur") };
+    juce::TextButton soundButton { tr ("Raum") };
+    void showSoundPanel();
     MarkerStrip markerStrip;
     std::set<int> computerKeysDown;
     int computerOctave = 60;

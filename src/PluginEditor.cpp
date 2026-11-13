@@ -51,6 +51,9 @@ OrgelEditor::OrgelEditor (OrgelProcessor& p)
     trackButton.setTooltip (tr ("Registrierungen an Stellen im Stück merken; beim Abspielen wird dort umgeschaltet (Taste R)"));
     addManualButton.onClick = [this] { proc.organ.addManual(); };
     soundFontButton.onClick = [this] { showSoundFontMenu(); };
+    soundButton.onClick = [this] { showSoundPanel(); };
+    soundButton.setTooltip (tr ("Klang und Raum: Kirche, Hörplatz, Bass, Tiefbass, Breite"));
+    addAndMakeVisible (soundButton);
     optionsButton.onClick = [this] { showOptionsMenu(); };
     registrationToggle.setToggleState (proc.applyFileRegistration, juce::dontSendNotification);
     registrationToggle.onClick = [this] {
@@ -361,6 +364,15 @@ void OrgelEditor::runScreenshot()
             if (wait < (profile::enabled() ? 240 : 90))
                 break;
             save ("orgelwerk-fortlaufend");
+            {
+                SoundPanel panel (proc); // the "Klang und Raum" window, drawn off screen
+                panel.setSize (380, 300);
+                auto img = panel.createComponentSnapshot (panel.getLocalBounds(), true, 2.0f);
+                juce::File f = juce::File (dir).getChildFile ("orgelwerk-raum.png");
+                f.deleteFile();
+                juce::FileOutputStream out (f);
+                juce::PNGImageFormat().writeImageToStream (img, out);
+            }
             proc.pause();
             desk.setView (savedZoom ? MusicDesk::View::pageWidth : MusicDesk::View::pages);
             proc.organ.master = savedMaster;
@@ -448,6 +460,14 @@ void OrgelEditor::toggleManualColours()
         p->repaint();
     if (proc.isStandalone())
         menuItemsChanged();
+}
+
+void OrgelEditor::showSoundPanel()
+{
+    auto panel = std::make_unique<SoundPanel> (proc);
+    panel->setSize (380, 300);
+    panel->onChange = [this] { reverb.setValue (proc.organ.reverb, juce::dontSendNotification); };
+    juce::CallOutBox::launchAsynchronously (std::move (panel), getLocalArea (&soundButton, soundButton.getLocalBounds()), this);
 }
 
 void OrgelEditor::togglePlay()
@@ -749,11 +769,13 @@ void OrgelEditor::resized()
     stopButton.setBounds (bar.removeFromLeft (34));
     bar.removeFromLeft (8);
 
-    auto rightPart = bar.removeFromRight (juce::jmin (680, bar.getWidth() / 2));
+    auto rightPart = bar.removeFromRight (juce::jmin (640, bar.getWidth() * 3 / 5));
     volume.setBounds (rightPart.removeFromRight (34));
     volumeLabel.setBounds (rightPart.removeFromRight (66));
     reverb.setBounds (rightPart.removeFromRight (34));
     reverbLabel.setBounds (rightPart.removeFromRight (36));
+    rightPart.removeFromRight (4);
+    soundButton.setBounds (rightPart.removeFromRight (64));
     rightPart.removeFromRight (6);
     if (optionsButton.isVisible())
         optionsButton.setBounds (rightPart.removeFromRight (78));
@@ -764,7 +786,7 @@ void OrgelEditor::resized()
     rightPart.removeFromRight (4);
     partsButton.setBounds (rightPart.removeFromRight (72));
     rightPart.removeFromRight (4);
-    trackButton.setBounds (rightPart.removeFromRight (112));
+    trackButton.setBounds (rightPart.removeFromRight (136));
     registrationToggle.setVisible (false); // lives in the tr ("Stimmen") menu
 
     auto mid = bar;
@@ -1110,6 +1132,7 @@ juce::PopupMenu OrgelEditor::getMenuForIndex (int index, const juce::String&)
         m.addItem (item (20, tr ("Manual hinzufügen")));
         m.addItem (item (21, tr ("Generalauslöser (alle Register ab)")));
         m.addItem (item (22, tr ("Pfeifen räumlich aufstellen"), {}, true, proc.organ.spatial));
+        m.addItem (item (23, tr ("Klang und Raum…")));
         juce::PopupMenu transpose;
         for (int t = -6; t <= 6; ++t)
             transpose.addItem (item (1000 + t, (t > 0 ? "+" : "") + juce::String (t) + tr (" Halbtöne"), {}, true, proc.organ.transpose == t));
@@ -1205,6 +1228,7 @@ void OrgelEditor::menuItemSelected (int id, int)
         case 20: proc.organ.addManual(); break;
         case 21: proc.organ.clearRegistration(); break;
         case 22: proc.organ.setSpatial (! proc.organ.spatial); break;
+        case 23: showSoundPanel(); break;
         case 25: proc.organ.setDefaultDisposition(); break;
         case 26: proc.organ.allNotesOff(); break;
         case 30: desk.setView (MusicDesk::View::pages); break;

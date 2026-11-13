@@ -75,6 +75,27 @@ public:
     void recallCombination (const juce::String& combination);
 
     float reverb = 0.35f, master = 0.75f;
+
+    // The church and the listener: how big the room is, where one sits, and how the sound is
+    // shaped (bass that fills the room, the low pedal stops one can feel, width, brilliance).
+    struct Acoustics
+    {
+        int room = 2;          // 0 chapel, 1 village church, 2 town church, 3 cathedral, 4 minster
+        // defaults matched to a recording of a real church organ (measured: ~2 s reverb,
+        // ~2.6 s in the bass, treble falling off strongly towards the listener)
+        float distance = 0.5f; // 0 at the console ... 1 at the back of the nave
+        float bass = 0.45f;    // the fundamental range (shelf around 180 Hz), and a longer bass reverb
+        float sub = 0.35f;     // the 16' and 32' range one feels (below ~45 Hz, with its overtones)
+        float width = 0.5f;    // stereo width
+        float treble = 0.4f;   // brilliance (0.5 = neutral)
+        bool operator== (const Acoustics& o) const
+        {
+            return room == o.room && distance == o.distance && bass == o.bass && sub == o.sub && width == o.width && treble == o.treble;
+        }
+    };
+    Acoustics getAcoustics() const;
+    void setAcoustics (const Acoustics& a);
+    static int numRooms() { return 5; }
     // pipes placed in the room (divisions at their positions, C/C# sides apart)
     bool spatial = true;
     void setSpatial (bool on);
@@ -155,6 +176,27 @@ private:
 
     void buildImpulseResponse();
     void updateGains (int numSamples);
+    void updateToneFilters();
+
+    // a plain biquad (coefficients worked out off the audio thread, no allocation)
+    struct Biquad
+    {
+        float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+        float z1[2] = {}, z2[2] = {};
+        float process (float x, int ch)
+        {
+            const float y = b0 * x + z1[ch];
+            z1[ch] = b1 * x - a1 * y + z2[ch];
+            z2[ch] = b2 * x - a2 * y;
+            return y;
+        }
+        void setCoefficients (const Biquad& c) { b0 = c.b0; b1 = c.b1; b2 = c.b2; a1 = c.a1; a2 = c.a2; }
+    };
+    Acoustics acoustics;
+    Biquad bassShelf, subShelf, trebleShelf, harmonicLow, harmonicBand, distanceShelf;
+    float harmonicGain = 0, widthFactor = 1, dryFactor = 1, wetFactor = 1;
+    int builtRoom = -1;
+    float builtBass = -1;
 
     juce::dsp::Convolution convolution { juce::dsp::Convolution::NonUniform { 1024 } };
     LookaheadLimiter limiter;
