@@ -1561,6 +1561,15 @@ namespace
     }
 } // namespace
 
+std::vector<PartInfo> partLayout (const Score& score, const Options& opt)
+{
+    auto q = build (score, opt);
+    std::vector<PartInfo> out;
+    for (auto& p : q.parts)
+        out.push_back ({ p.division, p.pedal });
+    return out;
+}
+
 juce::String toMusicXML (const Score& score, const Options& opt)
 {
     auto q = build (score, opt);
@@ -1588,8 +1597,11 @@ juce::String toMusicXML (const Score& score, const Options& opt)
         // empty staves when a score has more than one group sign)
         if (q.perManual && p == 0)
             o << "    <part-group type=\"start\" number=\"2\"><group-symbol>line</group-symbol><group-barline>yes</group-barline></part-group>\n";
+        // a pipe organ (MuseScore and other programs pick their organ instrument from this)
         o << "    <score-part id=\"P" << (p + 1) << "\"><part-name>" << esc (q.parts[(size_t) p].name) << "</part-name><part-abbreviation>"
-          << esc (q.parts[(size_t) p].abbreviation) << "</part-abbreviation></score-part>\n";
+          << esc (q.parts[(size_t) p].abbreviation) << "</part-abbreviation><score-instrument id=\"P" << (p + 1)
+          << "-I1\"><instrument-name>Pipe Organ</instrument-name><instrument-sound>keyboard.organ.pipe</instrument-sound></score-instrument>"
+          << "<midi-instrument id=\"P" << (p + 1) << "-I1\"><midi-channel>" << juce::jmin (16, p + 1) << "</midi-channel><midi-program>20</midi-program></midi-instrument></score-part>\n";
         if (q.perManual && p + 1 < numParts && q.parts[(size_t) p + 1].pedal)
             o << "    <part-group type=\"stop\" number=\"2\"/>\n";
         if (q.perManual && p + 1 == numParts && ! q.parts[(size_t) p].pedal)

@@ -39,6 +39,14 @@ namespace NotationBuilder
     juce::String divisionAbbreviation (const juce::String& name, int division, bool pedal);
 
     juce::String toMusicXML (const Score& score, const Options& options);
+    // The parts the score is written in, top to bottom (MusicXML P1, P2 ...): the division a
+    // part belongs to (-1: all manuals together) and whether it is the pedal.
+    struct PartInfo
+    {
+        int division = -1;
+        bool pedal = false;
+    };
+    std::vector<PartInfo> partLayout (const Score& score, const Options& options);
     juce::String toABC (const Score& score, const Options& options);
     juce::String toLilyPond (const Score& score, const Options& options);
     // colour used for the notes of a manual (0 = manual I, black)

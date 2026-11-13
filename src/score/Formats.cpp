@@ -1,4 +1,5 @@
 #include "Formats.h"
+#include "BinaryData.h"
 #include <set>
 #include "NotationBuilder.h"
 #include "Player.h"
@@ -100,6 +101,185 @@ static bool runMuseScore (const juce::File& in, const juce::File& out, juce::Str
         return false;
     }
     return true;
+}
+
+static NotationBuilder::Options builderOptions (const ExportContext& ctx);
+
+//==============================================================================
+// MuseScore export with the organ's sound: MuseScore plays each part through a SoundFont
+// preset chosen in its mixer. The exported file names the SoundFont Orgelwerk plays (placed
+// in MuseScore's SoundFonts folder if it is not there yet) and for each part the stop its
+// division starts with.
+static juce::File museScoreSoundFontFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("MuseScore4").getChildFile ("SoundFonts");
+}
+
+// The name MuseScore knows the SoundFont by (its file name without extension), after making
+// sure a copy is in MuseScore's folder. Empty if that failed.
+static juce::String soundFontForMuseScore (const SoundFont& sf)
+{
+    auto folder = museScoreSoundFontFolder();
+    if (! folder.isDirectory() && ! folder.createDirectory())
+        return {};
+    const auto source = sf.getFile();
+    const juce::String base = source.existsAsFile() ? source.getFileNameWithoutExtension() : juce::String ("Jeux14");
+    for (auto& f : folder.findChildFiles (juce::File::findFiles, false))
+        if (f.getFileNameWithoutExtension().equalsIgnoreCase (base)
+            && (f.hasFileExtension ("sf2") || f.hasFileExtension ("sf3")))
+            return base;
+    auto target = folder.getChildFile (base + (source.existsAsFile() ? source.getFileExtension() : juce::String (".sf2")));
+    const bool ok = source.existsAsFile() ? source.copyFileTo (target)
+                                          : target.replaceWithData (BinaryData::Jeux14_sf2, (size_t) BinaryData::Jeux14_sf2Size);
+    return ok ? base : juce::String();
+}
+
+// The stop a part is played with in MuseScore: the first one its division draws in the piece
+// (or on the console), else a principal (manuals) or a pedal stop.
+static RegStop presetForPart (const NotationBuilder::PartInfo& part, const ExportContext& ctx, const Score& score, const SoundFont& sf)
+{
+    int division = part.division;
+    if (part.pedal || division < 0)
+    {
+        // the pedal, or all manuals on one staff: the division of that kind that plays most
+        std::map<int, int> notesOn;
+        for (auto& n : score.notes)
+            if (n.part >= 0 && n.part < (int) ctx.partDivision.size() && ctx.partDivision[(size_t) n.part] >= 0
+                && n.part < (int) ctx.partIsPedal.size() && ctx.partIsPedal[(size_t) n.part] == part.pedal)
+                ++notesOn[ctx.partDivision[(size_t) n.part]];
+        int most = -1;
+        for (auto& [d, c] : notesOn)
+            if (most < 0 || c > notesOn[most])
+                most = d;
+        division = most;
+    }
+    // in the pedal a real pedal stop (16', "(ped.)", Posaune ...) rather than a manual one it borrows
+    auto pedalish = [&sf] (const RegStop& rs) {
+        auto n = sf.presetName (rs.bank, rs.program);
+        return n.containsIgnoreCase ("ped") || n.containsIgnoreCase ("Basse") || n.containsIgnoreCase ("Contra")
+               || n.containsIgnoreCase ("Posaune") || n.containsIgnoreCase ("Subbass") || n.contains ("16") || n.contains ("32");
+    };
+    for (auto& e : ctx.registrationTimeline)
+        if (e.division == division && ! e.registration.empty())
+        {
+            if (part.pedal)
+                for (auto& rs : e.registration)
+                    if (pedalish (rs))
+                        return rs;
+            return e.registration.front();
+        }
+    if (ctx.liveOrgan != nullptr && division >= 0)
+    {
+        const juce::ScopedLock sl (ctx.liveOrgan->getLock());
+        if (division < ctx.liveOrgan->getNumDivisions())
+            for (auto& st : ctx.liveOrgan->getDivision (division).stops)
+                if (st.on)
+                    return { st.bank, st.program, st.octave };
+    }
+    for (auto& p : sf.getPresets())
+        if (part.pedal ? (p.name.containsIgnoreCase ("Subbass") || p.name.containsIgnoreCase ("(ped")) : p.name.containsIgnoreCase ("Montre"))
+            return { p.bank, p.program, 0 };
+    return { 0, 0, 0 };
+}
+
+// Writes the SoundFont and the presets into the .mscz (its audiosettings.json), part by part.
+static bool assignMuseScoreSound (const juce::File& mscz, const ExportContext& ctx, const Score& score)
+{
+    auto sf = ctx.liveOrgan != nullptr ? ctx.liveOrgan->getSoundFont() : SoundFont::loadBuiltIn();
+    if (sf == nullptr)
+        return false;
+    const auto sfName = soundFontForMuseScore (*sf);
+    if (sfName.isEmpty())
+        return false;
+    const auto layout = NotationBuilder::partLayout (score, builderOptions (ctx));
+
+    juce::MemoryBlock zipData;
+    if (! mscz.loadFileAsData (zipData))
+        return false;
+    juce::MemoryInputStream zipStream (zipData, false);
+    juce::ZipFile zip (zipStream);
+    // the parts in the score file, in order: (part id, instrument id)
+    std::vector<std::pair<juce::String, juce::String>> parts;
+    juce::var settings;
+    for (int i = 0; i < zip.getNumEntries(); ++i)
+    {
+        auto* entry = zip.getEntry (i);
+        std::unique_ptr<juce::InputStream> in (zip.createStreamForEntry (i));
+        if (in == nullptr)
+            continue;
+        if (entry->filename.endsWithIgnoreCase (".mscx") && ! entry->filename.containsChar ('/'))
+            if (auto xml = juce::parseXML (in->readEntireStreamAsString()))
+                if (auto* sc = xml->getChildByName ("Score"))
+                    for (auto* part : sc->getChildWithTagNameIterator ("Part"))
+                        if (auto* inst = part->getChildByName ("Instrument"))
+                            parts.push_back ({ part->getStringAttribute ("id"), inst->getStringAttribute ("id") });
+        if (entry->filename == "audiosettings.json")
+            settings = juce::JSON::parse (in->readEntireStreamAsString());
+    }
+    if (parts.empty())
+        return false;
+    if (! settings.isObject())
+        settings = juce::var (new juce::DynamicObject());
+    juce::Array<juce::var> tracks;
+    for (size_t i = 0; i < parts.size(); ++i)
+    {
+        const auto rs = i < layout.size() ? presetForPart (layout[i], ctx, score, *sf) : RegStop { 0, 0, 0 };
+        auto* attributes = new juce::DynamicObject();
+        attributes->setProperty ("playbackSetupData", "keyboards.organ.pipe");
+        attributes->setProperty ("soundFontName", sfName);
+        attributes->setProperty ("presetName", sf->presetName (rs.bank, rs.program));
+        attributes->setProperty ("presetBank", juce::String (rs.bank));
+        attributes->setProperty ("presetProgram", juce::String (rs.program));
+        auto* meta = new juce::DynamicObject();
+        meta->setProperty ("attributes", juce::var (attributes));
+        meta->setProperty ("hasNativeEditorSupport", false);
+        meta->setProperty ("id", sfName + "\\" + juce::String (rs.bank) + "\\" + juce::String (rs.program));
+        meta->setProperty ("type", "fluid_soundfont");
+        meta->setProperty ("vendor", "Fluid");
+        auto* input = new juce::DynamicObject();
+        input->setProperty ("resourceMeta", juce::var (meta));
+        input->setProperty ("unitConfiguration", juce::var (new juce::DynamicObject()));
+        auto* output = new juce::DynamicObject();
+        output->setProperty ("auxSends", juce::Array<juce::var>());
+        output->setProperty ("balance", 0);
+        output->setProperty ("fxChain", juce::var (new juce::DynamicObject()));
+        output->setProperty ("volumeDb", 0);
+        auto* soloMute = new juce::DynamicObject();
+        soloMute->setProperty ("mute", false);
+        soloMute->setProperty ("solo", false);
+        auto* track = new juce::DynamicObject();
+        track->setProperty ("in", juce::var (input));
+        track->setProperty ("instrumentId", parts[i].second);
+        track->setProperty ("out", juce::var (output));
+        track->setProperty ("partId", parts[i].first);
+        track->setProperty ("soloMuteState", juce::var (soloMute));
+        tracks.add (juce::var (track));
+    }
+    settings.getDynamicObject()->setProperty ("tracks", tracks);
+
+    // the same archive with the new audiosettings.json
+    juce::ZipFile::Builder builder;
+    for (int i = 0; i < zip.getNumEntries(); ++i)
+    {
+        auto* entry = zip.getEntry (i);
+        if (entry->filename == "audiosettings.json")
+            continue;
+        std::unique_ptr<juce::InputStream> in (zip.createStreamForEntry (i));
+        if (in == nullptr)
+            continue;
+        juce::MemoryBlock data;
+        in->readIntoMemoryBlock (data);
+        builder.addEntry (new juce::MemoryInputStream (data, true), 9, entry->filename, entry->fileTime);
+    }
+    const auto json = juce::JSON::toString (settings);
+    builder.addEntry (new juce::MemoryInputStream (json.toRawUTF8(), json.getNumBytesAsUTF8(), true), 9, "audiosettings.json", juce::Time::getCurrentTime());
+    juce::TemporaryFile temp (mscz);
+    {
+        juce::FileOutputStream out (temp.getFile());
+        if (! out.openedOk() || ! builder.writeToStream (out, nullptr))
+            return false;
+    }
+    return temp.overwriteTargetFileWithTemporary();
 }
 
 OrganInfo OrganInfo::from (OrganEngine& organ, std::vector<DivisionRegistration> registration)
@@ -568,7 +748,11 @@ bool exportTo (const ExportFormat& fmt, const juce::File& target, const ExportCo
             return false;
         }
         target.deleteFile();
-        return runMuseScore (temp.getFile(), target, error);
+        if (! runMuseScore (temp.getFile(), target, error))
+            return false;
+        // the organ's SoundFont and stops for MuseScore's playback (the score is fine without)
+        assignMuseScoreSound (target, ctx, score);
+        return true;
     }
     if (fmt.isAudio)
     {
