@@ -18,8 +18,16 @@ void setSetting (const juce::String& code); // stored for the next start
 juce::String current();                     // the language in use
 } // namespace orgel::i18n
 
+namespace juce
+{
+class PropertiesFile;
+}
+
 namespace orgel
 {
+// settings of the program as a whole (language, own rooms), shared by the app and the plugins
+juce::PropertiesFile& appSettings();
+
 // the text in the current language (the German text if there is no translation)
 juce::String tr (const char* germanUtf8);
 } // namespace orgel

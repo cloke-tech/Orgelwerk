@@ -68,7 +68,7 @@ void MusicDesk::setView (View v)
     if (v == View::pageWidth)
         scroll = scrollTarget = page;
     else if (v == View::pages)
-        firstPage = visiblePages() == 2 ? page - (page % 2) : page;
+        firstPage = page;
     else
         prepareLine();
     resetFollowState();
@@ -212,6 +212,10 @@ void MusicDesk::prepareLine()
     tiles.clear();
     tilesPending.clear();
     lineX = lineXTarget = 0;
+    headerImage = {};
+    headerFraction = -1.0f;
+    headerMasks.clear();
+    firstBarMarks.clear();
     const int gen = ++lineGeneration;
     resetFollowState();
     juce::Component::SafePointer<MusicDesk> safe (this);
@@ -219,8 +223,28 @@ void MusicDesk::prepareLine()
         const auto svg = n->getPageSVG (0);
         auto page = std::make_shared<Page>();
         std::shared_ptr<juce::Drawable> forTiles;
+        std::vector<juce::String> marks;
         if (auto xml = juce::parseXML (svg))
         {
+            // tempo, texts and dynamics of the first bar (the header at the left edge leaves them out)
+            std::function<juce::XmlElement*(juce::XmlElement&)> firstMeasure = [&] (juce::XmlElement& e) -> juce::XmlElement* {
+                if (e.getStringAttribute ("class") == "measure")
+                    return &e;
+                for (auto* c : e.getChildIterator())
+                    if (auto* m = firstMeasure (*c))
+                        return m;
+                return nullptr;
+            };
+            std::function<void (juce::XmlElement&)> collect = [&] (juce::XmlElement& e) {
+                const auto cls = e.getStringAttribute ("class");
+                if (cls == "tempo" || cls == "dir" || cls == "dynam" || cls == "reh" || cls == "harm")
+                    marks.push_back (e.getStringAttribute ("id"));
+                else
+                    for (auto* c : e.getChildIterator())
+                        collect (*c);
+            };
+            if (auto* m = firstMeasure (*xml))
+                collect (*m);
             page->drawable = juce::Drawable::createFromSVG (*xml);
             forTiles = juce::Drawable::createFromSVG (*xml);
         }
@@ -236,9 +260,10 @@ void MusicDesk::prepareLine()
             walk (page->drawable.get());
             page->bounds = page->drawable->getDrawableBounds();
         }
-        juce::MessageManager::callAsync ([safe, page, forTiles, gen] {
+        juce::MessageManager::callAsync ([safe, page, forTiles, gen, marks] {
             if (safe == nullptr || gen != safe->lineGeneration || page->drawable == nullptr)
                 return;
+            safe->firstBarMarks = marks;
             safe->line = std::make_unique<Page> (std::move (*page));
             safe->tileDrawable = forTiles;
             safe->updateNav();
@@ -288,6 +313,7 @@ void MusicDesk::paintLine (juce::Graphics& g)
         tileKey = key;
         tiles.clear();
         tilesPending.clear();
+        headerImage = {};
     }
     const juce::Graphics::ScopedSaveState save (g);
     g.reduceClipRegion (va.toNearestInt());
@@ -313,7 +339,71 @@ void MusicDesk::paintLine (juce::Graphics& g)
     // drop tiles far away
     for (auto it = tiles.begin(); it != tiles.end();)
         it = (it->first < first - 3 || it->first > last + 6) ? tiles.erase (it) : std::next (it);
+    drawLineHeader (g, r, phys);
     drawCursor (g);
+}
+
+void MusicDesk::drawLineHeader (juce::Graphics& g, juce::Rectangle<float> r, float phys)
+{
+    if (auto it = tiles.find (0); it != tiles.end())
+        headerImage = it->second;
+    if (headerFraction < 0.0f && ! onsets.empty() && lineNotation != nullptr && r.getWidth() > 0)
+    {
+        // up to just before the first note
+        headerFraction = 0.0f;
+        for (auto& id : lineNotation->getTimemap()[onsets.front()].on)
+            if (auto d = line->ids.find (id); d != line->ids.end())
+            {
+                const auto note = elementArea (*line, d->second, r);
+                // a little before it: ornaments and accidentals stand left of the note
+                headerFraction = juce::jmax (0.0f, (note.getX() - note.getHeight() * 0.8f - 2.0f - r.getX()) / r.getWidth());
+                break;
+            }
+        for (auto& sid : lineNotation->getSystemIds (0))
+            if (auto d = line->ids.find (sid); d != line->ids.end())
+            {
+                const auto sys = elementArea (*line, d->second, r).expanded (0.0f, 4.0f);
+                headerRows = { (sys.getY() - r.getY()) / r.getHeight(), (sys.getBottom() - r.getY()) / r.getHeight() };
+                break;
+            }
+        for (auto& id : firstBarMarks)
+            if (auto d = line->ids.find (id); d != line->ids.end())
+            {
+                const auto m = elementArea (*line, d->second, r).expanded (2.0f);
+                headerMasks.push_back ({ (m.getX() - r.getX()) / r.getWidth(), (m.getY() - r.getY()) / r.getHeight(),
+                                         m.getWidth() / r.getWidth(), m.getHeight() / r.getHeight() });
+            }
+    }
+    if (lineX < 0.5 || headerFraction <= 0.0f)
+        return;
+    if (! headerImage.isValid())
+    {
+        requestTile (0, phys);
+        return;
+    }
+    const auto va = viewArea();
+    const float w = juce::jmin (headerFraction * r.getWidth(), tileWidth, va.getWidth() * 0.3f);
+    {
+        const juce::Graphics::ScopedSaveState save (g);
+        g.reduceClipRegion (juce::Rectangle<float> (va.getX(), va.getY(), w, va.getHeight()).toNearestInt());
+        g.setColour (juce::Colour (0xfffdfbf5));
+        g.fillRect (va);
+        // only the staves: tempo marks and texts above them belong to the first bar
+        g.reduceClipRegion (juce::Rectangle<float> (va.getX(), r.getY() + headerRows.getStart() * r.getHeight(), w,
+                                                    headerRows.getLength() * r.getHeight()).toNearestInt());
+        const float x = std::round (va.getX() * phys) / phys;
+        const float y = std::round (r.getY() * phys) / phys;
+        g.drawImageTransformed (headerImage, juce::AffineTransform::scale (1.0f / phys).translated (x, y));
+        g.setColour (juce::Colour (0xfffdfbf5));
+        for (auto& m : headerMasks)
+            g.fillRect (va.getX() + m.getX() * r.getWidth(), r.getY() + m.getY() * r.getHeight(), m.getWidth() * r.getWidth(),
+                        m.getHeight() * r.getHeight());
+    }
+    // a soft edge: the music slides in under the header
+    const float edge = va.getX() + w;
+    g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.12f), edge, 0.0f,
+                                             juce::Colours::transparentBlack, edge + 10.0f, 0.0f, false));
+    g.fillRect (juce::Rectangle<float> (edge, va.getY(), 10.0f, va.getHeight()));
 }
 
 void MusicDesk::requestTile (int index, float physicalScale)
@@ -682,7 +772,22 @@ void MusicDesk::paint (juce::Graphics& g)
     }
     const int n = visiblePages();
     const double turn = turnFrom >= 0 ? (juce::Time::getMillisecondCounterHiRes() - turnStart) / 280.0 : 1.0;
-    if (turn < 1.0)
+    if (turn < 1.0 && n == 2 && std::abs (firstPage - turnFrom) == 1)
+    {
+        // turning by one page: the row of pages slides over by one slot, the page leaving fades
+        // out on one side while the next one fades in on the other
+        const float e = 1.0f - (float) std::pow (1.0 - turn, 3.0);
+        const float pos = (float) turnFrom + (float) (firstPage - turnFrom) * e;
+        const float stride = pageSlot (1).getX() - pageSlot (0).getX();
+        for (int i = juce::jmin (turnFrom, firstPage); i <= juce::jmax (turnFrom, firstPage) + 1; ++i)
+        {
+            const float rel = (float) i - pos;
+            const float alpha = juce::jlimit (0.0f, 1.0f, 1.0f - juce::jmax (0.0f, -rel, rel - 1.0f));
+            if (alpha > 0.0f)
+                drawPageAt (g, i, pageSlot (0).translated (rel * stride, 0.0f), alpha, alpha >= 1.0f);
+        }
+    }
+    else if (turn < 1.0)
     {
         // page turn: the new pages glide in over the old ones and become solid
         const float e = 1.0f - (float) std::pow (1.0 - turn, 3.0);
@@ -1035,8 +1140,9 @@ void MusicDesk::update (double dt)
     {
         const int page = piece->notation->pageOfElement (newest);
         const int n = visiblePages();
-        if (! zoomed && page >= 0 && (page < firstPage || page >= firstPage + n))
-            showPage (n == 2 ? page - (page % 2) : page);
+        // two pages: the page being played stays on the left, the next one is already on the right
+        if (! zoomed && page >= 0 && (n == 2 ? page != firstPage : (page < firstPage || page >= firstPage + n)))
+            showPage (page);
         if (zoomed)
             followNote = newest;
     }

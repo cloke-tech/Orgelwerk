@@ -498,6 +498,7 @@ void OrgelProcessor::requestContinuous()
     }
     auto info = Formats::OrganInfo::from (organ, std::move (reg));
     info.colourManuals = colourManuals;
+    info.staffPerManual = staffPerManual;
     std::weak_ptr<int> token = alive;
     pool.addJob ([this, p, pedal, map, info, token] {
         juce::String error;

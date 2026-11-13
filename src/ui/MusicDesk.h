@@ -88,6 +88,14 @@ private:
     int lineGeneration = 0;
     double lineX = 0, lineXTarget = 0; // how far the line is scrolled to the left (pixels)
     static constexpr float tileWidth = 1024.0f;
+    // the start of the line (staff names, clefs, key and time) stays at the left edge while the
+    // line scrolls, so one always sees which staff is which manual
+    juce::Image headerImage;     // a copy of the first tile
+    float headerFraction = -1.0f; // its width as a part of the line (-1: not worked out yet)
+    juce::Range<float> headerRows { 0.0f, 1.0f }; // the staves (without tempo marks above), as parts of the height
+    std::vector<juce::String> firstBarMarks;            // tempo and texts of the first bar: left out of the header
+    std::vector<juce::Rectangle<float>> headerMasks;    // where they are, as parts of the line's size
+    void drawLineHeader (juce::Graphics& g, juce::Rectangle<float> r, float phys);
     std::shared_ptr<Notation> shownNotation() const;
     void prepareLine();
     void resetFollowState();

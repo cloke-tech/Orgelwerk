@@ -366,7 +366,7 @@ void OrgelEditor::runScreenshot()
             save ("orgelwerk-fortlaufend");
             {
                 SoundPanel panel (proc); // the "Klang und Raum" window, drawn off screen
-                panel.setSize (380, 300);
+                panel.setSize (420, 310);
                 auto img = panel.createComponentSnapshot (panel.getLocalBounds(), true, 2.0f);
                 juce::File f = juce::File (dir).getChildFile ("orgelwerk-raum.png");
                 f.deleteFile();
@@ -377,7 +377,7 @@ void OrgelEditor::runScreenshot()
                 const auto keptReverb = proc.organ.reverb;
                 for (auto* c : panel.getChildren())
                     if (auto* box = dynamic_cast<juce::ComboBox*> (c))
-                        box->setSelectedId (OrganEngine::numRooms(), juce::sendNotificationSync);
+                        box->setSelectedId ((int) SoundPanel::builtInPresets().size(), juce::sendNotificationSync);
                 auto img2 = panel.createComponentSnapshot (panel.getLocalBounds(), true, 2.0f);
                 juce::File f2 = juce::File (dir).getChildFile ("orgelwerk-raum-dom.png");
                 f2.deleteFile();
@@ -478,7 +478,7 @@ void OrgelEditor::toggleManualColours()
 void OrgelEditor::showSoundPanel()
 {
     auto panel = std::make_unique<SoundPanel> (proc);
-    panel->setSize (380, 300);
+    panel->setSize (420, 310);
     panel->onChange = [this] { reverb.setValue (proc.organ.reverb, juce::dontSendNotification); };
     juce::CallOutBox::launchAsynchronously (std::move (panel), getLocalArea (&soundButton, soundButton.getLocalBounds()), this);
 }

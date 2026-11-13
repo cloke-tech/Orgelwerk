@@ -15,6 +15,16 @@ const std::vector<Language>& languages()
     return list;
 }
 
+static juce::PropertiesFile& settingsFile();
+} // namespace orgel::i18n
+
+juce::PropertiesFile& orgel::appSettings()
+{
+    return orgel::i18n::settingsFile();
+}
+
+namespace orgel::i18n
+{
 static juce::PropertiesFile& settingsFile()
 {
     static juce::PropertiesFile file = [] {

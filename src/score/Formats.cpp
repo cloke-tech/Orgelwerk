@@ -521,9 +521,16 @@ std::shared_ptr<Notation> engraveContinuous (const Piece& piece, const std::vect
         opt.partIsPedal = partIsPedal;
         opt.partDivision = partDivision;
         applyOrganInfo (opt, organ);
-        opt.staffPerManual = false; // one line can not leave out staves: the classic three
+        // each manual on its own staff here too; on one long line, a staff that is empty for the
+        // whole piece is left out
         data = NotationBuilder::toMusicXML (*piece.score, opt);
         format = "musicxml";
+        auto n = std::make_shared<Notation>();
+        n->setContinuous (true);
+        n->setHideEmptyStaves (opt.staffPerManual);
+        if (! n->loadData (data, format, error))
+            return {};
+        return n;
     }
     else if (piece.notation != nullptr && piece.notation->getSourceData().isNotEmpty())
     {
