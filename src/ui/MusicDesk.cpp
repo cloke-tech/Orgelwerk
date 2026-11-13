@@ -92,11 +92,104 @@ void MusicDesk::resetFollowState()
     lastBeat = -1;
     followNote = {};
     noteBeat.clear();
+    onsets.clear();
     if (auto n = shownNotation())
-        for (auto& e : n->getTimemap())
-            for (auto& id : e.on)
+    {
+        auto& tm = n->getTimemap();
+        for (size_t i = 0; i < tm.size(); ++i)
+        {
+            for (auto& id : tm[i].on)
                 if (! noteBeat.count (id))
-                    noteBeat[id] = e.qstamp;
+                    noteBeat[id] = tm[i].qstamp;
+            if (! tm[i].on.empty())
+                onsets.push_back (i);
+        }
+    }
+}
+
+// The cursor stands at the notes being played and moves on evenly towards the next ones (as
+// far as they are on the same line), over the full height of that line of staves.
+MusicDesk::Cursor MusicDesk::cursorAt (double beat)
+{
+    Cursor c;
+    auto n = shownNotation();
+    if (n == nullptr || beat < 0 || onsets.empty())
+        return c;
+    auto& tm = n->getTimemap();
+    auto it = std::upper_bound (onsets.begin(), onsets.end(), beat + 1.0e-4, [&tm] (double b, size_t e) { return b < tm[e].qstamp; });
+    const size_t k = it == onsets.begin() ? 0 : (size_t) (it - onsets.begin()) - 1;
+
+    // a notehead of an onset, the line of staves around it and the page it is on
+    auto locate = [&] (size_t onsetIndex, juce::Rectangle<float>& note, juce::Rectangle<float>& system, int& pageIndex) {
+        const auto& entry = tm[onsets[onsetIndex]];
+        for (auto& id : entry.on)
+        {
+            Page* pg = nullptr;
+            juce::Rectangle<float> slot;
+            if (view == View::continuous)
+            {
+                pg = line.get();
+                slot = lineRect();
+                pageIndex = 0;
+            }
+            else
+            {
+                pageIndex = n->pageOfElement (id);
+                slot = pageRect (pageIndex);
+                pg = slot.isEmpty() ? nullptr : findPage (pageIndex);
+            }
+            if (pg == nullptr || pg->drawable == nullptr)
+                return false;
+            auto d = pg->ids.find (id);
+            if (d == pg->ids.end())
+                continue;
+            note = elementArea (*pg, d->second, slot);
+            system = slot;
+            for (auto& sid : n->getSystemIds (pageIndex))
+                if (auto s2 = pg->ids.find (sid); s2 != pg->ids.end())
+                {
+                    auto sys = elementArea (*pg, s2->second, slot);
+                    if (sys.getY() - 4.0f <= note.getCentreY() && note.getCentreY() <= sys.getBottom() + 4.0f)
+                    {
+                        system = sys;
+                        break;
+                    }
+                }
+            return true;
+        }
+        return false;
+    };
+    juce::Rectangle<float> noteA, sysA, noteB, sysB;
+    int pageA = -1, pageB = -1;
+    if (! locate (k, noteA, sysA, pageA))
+        return c;
+    float x = noteA.getCentreX();
+    const double qA = tm[onsets[k]].qstamp;
+    if (beat > qA && k + 1 < onsets.size() && locate (k + 1, noteB, sysB, pageB) && pageB == pageA
+        && std::abs (sysB.getY() - sysA.getY()) < 2.0f && noteB.getCentreX() > x)
+    {
+        const double qB = tm[onsets[k + 1]].qstamp;
+        const double f = juce::jlimit (0.0, 1.0, (beat - qA) / juce::jmax (1.0e-6, qB - qA));
+        x += (float) f * (noteB.getCentreX() - x);
+    }
+    const float w = juce::jmax (5.0f, noteA.getWidth() * 1.3f);
+    const float pad = sysA.getHeight() * 0.03f + 2.0f;
+    c.valid = true;
+    c.area = { x - w / 2, sysA.getY() - pad, w, sysA.getHeight() + 2 * pad };
+    if (view == View::continuous)
+        c.lineX = x - lineRect().getX();
+    return c;
+}
+
+void MusicDesk::drawCursor (juce::Graphics& g)
+{
+    auto c = cursorAt (lastBeat);
+    if (! c.valid)
+        return;
+    g.setColour (juce::Colour (0x4d2f80ed));
+    g.fillRoundedRectangle (c.area, 2.0f);
+    g.setColour (juce::Colour (0xb32f80ed));
+    g.drawRoundedRectangle (c.area, 2.0f, 1.2f);
 }
 
 // The continuous view needs the piece set on one long line: asked for once, then read in the
@@ -141,6 +234,7 @@ void MusicDesk::prepareLine()
                         walk (cd);
             };
             walk (page->drawable.get());
+            page->bounds = page->drawable->getDrawableBounds();
         }
         juce::MessageManager::callAsync ([safe, page, forTiles, gen] {
             if (safe == nullptr || gen != safe->lineGeneration || page->drawable == nullptr)
@@ -159,7 +253,7 @@ juce::Rectangle<float> MusicDesk::lineRect() const
     auto va = viewArea();
     if (line == nullptr || line->drawable == nullptr)
         return {};
-    auto b = line->drawable->getDrawableBounds();
+    auto b = line->bounds;
     if (b.getHeight() <= 0)
         return {};
     const float s = va.getHeight() * 0.94f / b.getHeight();
@@ -197,13 +291,19 @@ void MusicDesk::paintLine (juce::Graphics& g)
     }
     const juce::Graphics::ScopedSaveState save (g);
     g.reduceClipRegion (va.toNearestInt());
+    g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
     const int first = juce::jmax (0, (int) std::floor (lineX / tileWidth));
     const int last = (int) std::floor ((lineX + va.getWidth()) / tileWidth);
     const int count = (int) std::ceil (r.getWidth() / tileWidth);
     for (int i = first; i <= last && i < count; ++i)
     {
         if (auto it = tiles.find (i); it != tiles.end())
-            g.drawImage (it->second, { r.getX() + i * tileWidth, r.getY(), tileWidth, r.getHeight() });
+        {
+            // on whole screen pixels and without smoothing: the tile is copied 1:1
+            const float x = std::round ((r.getX() + i * tileWidth) * phys) / phys;
+            const float y = std::round (r.getY() * phys) / phys;
+            g.drawImageTransformed (it->second, juce::AffineTransform::scale (1.0f / phys).translated (x, y));
+        }
         else
             requestTile (i, phys);
     }
@@ -213,9 +313,7 @@ void MusicDesk::paintLine (juce::Graphics& g)
     // drop tiles far away
     for (auto it = tiles.begin(); it != tiles.end();)
         it = (it->first < first - 3 || it->first > last + 6) ? tiles.erase (it) : std::next (it);
-    for (auto& id : active)
-        if (auto it = line->ids.find (id); it != line->ids.end())
-            drawHighlighted (g, *line, it->second, r);
+    drawCursor (g);
 }
 
 void MusicDesk::requestTile (int index, float physicalScale)
@@ -224,7 +322,7 @@ void MusicDesk::requestTile (int index, float physicalScale)
         return;
     tilesPending.insert (index);
     const auto r = lineRect();
-    const auto bounds = tileDrawable->getDrawableBounds();
+    const auto bounds = line != nullptr ? line->bounds : tileDrawable->getDrawableBounds();
     const float s = r.getHeight() / bounds.getHeight();
     auto drawable = tileDrawable;
     const auto key = tileKey;
@@ -316,6 +414,7 @@ void MusicDesk::measureLines()
                         walk (cd);
             };
             walk (page.drawable.get());
+            page.bounds = page.drawable->getDrawableBounds();
             const juce::Rectangle<float> unit (0.0f, 0.0f, 2100.0f, 2970.0f);
             for (auto& sid : notation->getSystemIds (p))
                 if (auto it = page.ids.find (sid); it != page.ids.end())
@@ -373,6 +472,7 @@ void MusicDesk::requestPage (int index, int width, int height)
                         walk (cd);
             };
             walk (page->drawable.get());
+            page->bounds = page->drawable->getDrawableBounds();
             ORGEL_PROFILE_SCOPE ("desk.renderPage");
             page->image = juce::Image (juce::Image::RGB, width, height, false);
             juce::Graphics ig (page->image);
@@ -575,6 +675,7 @@ void MusicDesk::paint (juce::Graphics& g)
     {
         for (int index : shownPages())
             drawPageAt (g, index, pageRect (index), 1.0f, true);
+        drawCursor (g);
         g.restoreState();
         prefetch();
         return;
@@ -591,8 +692,11 @@ void MusicDesk::paint (juce::Graphics& g)
             drawPageAt (g, firstPage + sl, pageSlot (sl).translated ((1.0f - e) * (float) turnDirection * pageSlot (sl).getWidth() * 0.18f, 0.0f), e, true);
     }
     else
+    {
         for (int sl = 0; sl < n; ++sl)
             drawPageAt (g, firstPage + sl, pageSlot (sl), 1.0f, true);
+        drawCursor (g);
+    }
     g.restoreState();
     prefetch();
 }
@@ -618,11 +722,7 @@ void MusicDesk::drawPageAt (juce::Graphics& g, int index, juce::Rectangle<float>
     g.setOpacity (alpha);
     g.drawImage (page->image, slot);
     g.setOpacity (1.0f);
-    // the notes sounding now, drawn on top in red
-    if (withHighlights)
-        for (auto& id : active)
-            if (auto it = page->ids.find (id); it != page->ids.end())
-                drawHighlighted (g, *page, it->second, slot);
+    juce::ignoreUnused (withHighlights);
 }
 
 void MusicDesk::resized()
@@ -742,11 +842,9 @@ static void highlight (juce::Drawable* d, bool on,
             highlight (cd, on, shapes, texts);
 }
 
-void MusicDesk::setHighlight (const juce::String& id, bool)
+void MusicDesk::setHighlight (const juce::String&, bool)
 {
-    auto area = areaOfNote (id);
-    if (! area.isEmpty())
-        repaint (area);
+    // the cursor shows what is playing (see update)
 }
 
 // screen area of a note on a visible page (empty if it is not shown)
@@ -780,8 +878,8 @@ void MusicDesk::drawHighlighted (juce::Graphics& g, Page& page, juce::Drawable* 
     juce::AffineTransform t;
     for (juce::Component* c = d; c != nullptr && c != root; c = c->getParentComponent())
         t = t.followedBy (juce::AffineTransform::translation ((float) c->getX(), (float) c->getY()).followedBy (c->getTransform()));
-    const auto fit = juce::RectanglePlacement (juce::RectanglePlacement::centred).getTransformToFit (root->getDrawableBounds(), slot);
-    t = t.followedBy (juce::AffineTransform::translation (root->getDrawableBounds().getTopLeft())).followedBy (fit);
+    const auto fit = juce::RectanglePlacement (juce::RectanglePlacement::centred).getTransformToFit (page.bounds, slot);
+    t = t.followedBy (juce::AffineTransform::translation (page.bounds.getTopLeft())).followedBy (fit);
     const juce::Graphics::ScopedSaveState save (g);
     g.addTransform (t);
     highlight (d, true, page.shapeColours, page.textColours);
@@ -809,7 +907,8 @@ void MusicDesk::update (double dt)
             updateNav();
     }
     followInZoom();
-    if (view == View::continuous && std::abs (lineXTarget - lineX) > 0.3)
+    const bool playingAlong = view == View::continuous && follow && proc.isPlaying();
+    if (view == View::continuous && ! playingAlong && std::abs (lineXTarget - lineX) > 0.3)
     {
         // the line glides along with the music
         lineX += (lineXTarget - lineX) * (1.0 - std::exp (-dt * 5.0));
@@ -826,9 +925,73 @@ void MusicDesk::update (double dt)
         return;
     }
     auto& tm = shown->getTimemap();
-    const double beat = proc.isPlaying() || proc.getPosition() > 0 ? proc.getCurrentBeat() : -1.0;
+    const double reported = proc.isPlaying() || proc.getPosition() > 0 ? proc.getCurrentBeat() : -1.0;
+    double beat = reported;
+    if (proc.isPlaying() && reported >= 0 && smoothBeat >= 0 && std::abs (reported - smoothBeat) < 1.0)
+    {
+        // the pace in beats per second, measured from the reported positions
+        if (reported != lastReported && lastReported >= 0 && dt > 0)
+        {
+            const double measured = (reported - lastReported) / dt;
+            beatRate = beatRate <= 0 ? measured : beatRate + (measured - beatRate) * 0.05;
+        }
+        smoothBeat += beatRate * dt;
+        smoothBeat += (reported - smoothBeat) * (1.0 - std::exp (-dt * 4.0));
+        beat = smoothBeat;
+    }
+    else
+    {
+        smoothBeat = reported;
+        beatRate = 0;
+    }
+    lastReported = reported;
     if (std::abs (beat - lastBeat) < 1.0e-6)
         return;
+    {
+        // the cursor moves with the music; the continuous line follows it evenly, a third
+        // into the view (gently smoothed, as playback reports its position in steps)
+        auto c = cursorAt (beat);
+        if (playingAlong && c.valid)
+        {
+            const auto va = viewArea();
+            const double target = juce::jlimit (0.0, maxLineX(), c.lineX - va.getWidth() * 0.3);
+            const double before = lineX;
+            if (std::abs (target - lineX) > va.getWidth())
+            {
+                lineX = target; // jumped (seek)
+                lineVelocity = 0;
+            }
+            else
+            {
+                // critically damped spring: the speed changes smoothly, never in jolts
+                constexpr double omega = 3.5;
+                const double h = juce::jmin (dt, 0.05);
+                lineVelocity += (omega * omega * (target - lineX) - 2.0 * omega * lineVelocity) * h;
+                lineX += lineVelocity * h;
+            }
+            if (profile::enabled())
+            {
+                static double lastStep = 0;
+                const double step = lineX - before;
+                if (std::abs (step) < 50.0 && std::abs (lastStep) < 50.0)
+                {
+                    profile::record ("line.step", std::abs (step));
+                    profile::record ("line.stepChange", std::abs (step - lastStep));
+                }
+                lastStep = step;
+            }
+            lineXTarget = lineX;
+            repaint (va.expanded (8.0f).toNearestInt());
+            updateNav();
+        }
+        else if (c.valid || ! cursorShown.isEmpty())
+        {
+            auto dirty = c.valid ? c.area : juce::Rectangle<float>();
+            dirty = dirty.isEmpty() ? cursorShown : (cursorShown.isEmpty() ? dirty : dirty.getUnion (cursorShown));
+            repaint (dirty.expanded (3.0f).getSmallestIntegerContainer());
+        }
+        cursorShown = c.valid ? c.area : juce::Rectangle<float>();
+    }
 
     std::set<juce::String> now;
     if (beat < lastBeat || lastBeat < 0)
@@ -866,17 +1029,8 @@ void MusicDesk::update (double dt)
     active = std::move (now);
 
     changed = false; // note areas were repainted individually by setHighlight
-    if (follow && newest.isNotEmpty() && view == View::continuous && line != nullptr)
-    {
-        // keep the playing notes about a third into the view
-        if (auto it = line->ids.find (newest); it != line->ids.end())
-        {
-            const auto va = viewArea();
-            const double x = elementArea (*line, it->second, lineRect()).getCentreX() - va.getX() + lineX;
-            lineXTarget = juce::jlimit (0.0, maxLineX(), x - va.getWidth() * 0.3);
-        }
-        return;
-    }
+    if (view == View::continuous)
+        return; // the line follows the cursor (above)
     if (follow && newest.isNotEmpty() && piece->notation != nullptr)
     {
         const int page = piece->notation->pageOfElement (newest);
@@ -937,8 +1091,8 @@ void MusicDesk::followInZoom()
 juce::Rectangle<float> MusicDesk::elementArea (Page& page, juce::Drawable* d, juce::Rectangle<float> slot)
 {
     auto* root = page.drawable.get();
-    auto fit = juce::RectanglePlacement (juce::RectanglePlacement::centred).getTransformToFit (root->getDrawableBounds(), slot);
-    const auto origin = root->getDrawableBounds().getTopLeft();
+    auto fit = juce::RectanglePlacement (juce::RectanglePlacement::centred).getTransformToFit (page.bounds, slot);
+    const auto origin = page.bounds.getTopLeft();
     return root->getLocalArea (d, d->getLocalBounds()).toFloat().translated (origin.x, origin.y).transformedBy (fit);
 }
 

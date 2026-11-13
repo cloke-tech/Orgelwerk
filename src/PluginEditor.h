@@ -69,14 +69,14 @@ public:
 private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
-    void animate();
+    void animate (double frameTime = -1.0); // frameTime: when the frame shows (seconds), if known
     void runDeskTest();
     void runScreenshot();
     void toggleManualColours();
     juce::PopupMenu languageMenu (int firstId);
     void chooseLanguage (int index);
     juce::VBlankAttachment vblank;
-    double lastAnimate = 0;
+    double lastAnimate = 0, lastFrameTime = -1.0;
     void rebuildConsole();
     juce::String structureSignature() const;
     void drawFacade (juce::Graphics& g, juce::Rectangle<float> area);

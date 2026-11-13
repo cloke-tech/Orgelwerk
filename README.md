@@ -22,8 +22,8 @@ SF2-SoundFont (eingebaut: **Jeux14**), die Noten stehen auf dem Notenpult in der
   II = 2, III = 3, Pedal = 4.
 - **Notenpult**: zeigt die Partitur als ganze Seiten (1 oder 2), in „Seitenbreite“ (die Seiten
   rollen durchgehend, die gespielte Zeile bleibt ganz im Bild) oder „Fortlaufend“ (das Stück auf
-  einer langen Zeile, die beim Spielen von links nach rechts mitgleitet), markiert beim Abspielen die
-  klingenden Noten, blättert mit, Klick auf eine Note springt dorthin. Leertaste =
+  einer langen Zeile, die beim Spielen gleichmäßig mitgleitet); ein Wiedergabe-Balken wie in
+  MuseScore läuft beim Abspielen mit, blättert mit, Klick auf eine Note springt dorthin. Leertaste =
   Start/Pause, Pfeiltasten = ±5 s.
 - **Notenbild wie Orgelausgaben**: eigene Systeme je Manual und Pedal (leere werden pro Zeile
   ausgeblendet; klassisch mit drei Systemen unter „Ansicht“), Registrierung aus der Datei als

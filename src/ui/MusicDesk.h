@@ -40,6 +40,8 @@ private:
         std::map<juce::DrawableShape*, std::pair<juce::FillType, juce::FillType>> shapeColours;
         std::map<juce::DrawableText*, juce::Colour> textColours;
         juce::Image image; // the page rendered once at its current size
+        // the drawing's bounds, worked out once (JUCE adds up all elements on every call)
+        juce::Rectangle<float> bounds;
     };
     void drawHighlighted (juce::Graphics& g, Page& page, juce::Drawable* d, juce::Rectangle<float> slot);
     juce::Rectangle<int> areaOfNote (const juce::String& id);
@@ -93,6 +95,22 @@ private:
     double maxLineX() const;
     void paintLine (juce::Graphics& g);
     void requestTile (int index, float physicalScale);
+
+    // the playback cursor (a bar over the line of staves, like MuseScore's): where it is at a beat
+    struct Cursor
+    {
+        bool valid = false;
+        juce::Rectangle<float> area; // on screen
+        double lineX = 0;            // continuous view: its place on the long line
+    };
+    Cursor cursorAt (double beat);
+    void drawCursor (juce::Graphics& g);
+    std::vector<size_t> onsets; // timemap entries where notes start
+    juce::Rectangle<float> cursorShown;
+    // a steady playback clock for the desk: runs on at the music's pace between the position
+    // updates of the audio thread (which come in steps) and is gently pulled towards them
+    double smoothBeat = -1, beatRate = 0, lastReported = -1;
+    double lineVelocity = 0; // the continuous line follows the cursor like a damped spring
     double scroll = 0.0; // page width: pages scrolled past the top of the view (fractional)
     double scrollTarget = 0.0; // scroll glides towards this
     // page turn: the new pages slide in over the old ones

@@ -118,7 +118,7 @@ OrgelEditor::OrgelEditor (OrgelProcessor& p)
     if (proc.isStandalone())
         optionsButton.setVisible (false); // in the menu bar instead
     setWantsKeyboardFocus (true);
-    vblank = juce::VBlankAttachment (this, [this] { animate(); });
+    vblank = juce::VBlankAttachment (this, [this] (double frameTime) { animate (frameTime); });
     startTimerHz (15);
 }
 
@@ -231,13 +231,18 @@ void OrgelEditor::changeListenerCallback (juce::ChangeBroadcaster*)
 }
 
 // Everything that moves runs once per display frame (60 or 120 times a second), in step with the screen.
-void OrgelEditor::animate()
+void OrgelEditor::animate (double frameTime)
 {
     ORGEL_PROFILE_SCOPE ("editor.animate");
     const double now = juce::Time::getMillisecondCounterHiRes();
     if (profile::enabled() && lastAnimate > 0)
         profile::record ("frame.gap", now - lastAnimate);
-    const double dt = lastAnimate > 0 ? juce::jlimit (0.0, 0.1, (now - lastAnimate) / 1000.0) : 1.0 / 60.0;
+    // steps between frames from the display's own frame times (exactly even), not from when
+    // the callback happens to run; without them (timer fallback) from the clock
+    double dt = lastAnimate > 0 ? juce::jlimit (0.0, 0.1, (now - lastAnimate) / 1000.0) : 1.0 / 60.0;
+    if (frameTime > 0 && lastFrameTime > 0 && frameTime > lastFrameTime)
+        dt = juce::jlimit (0.0, 0.1, frameTime - lastFrameTime);
+    lastFrameTime = frameTime > 0 ? frameTime : -1.0;
     lastAnimate = now;
     for (auto* k : keyboards)
         k->update();
@@ -352,8 +357,8 @@ void OrgelEditor::runScreenshot()
             wait = 0;
             break;
         case 4:
-            // the long line is set in the background first
-            if (wait < 90)
+            // the long line is set in the background first (and plays a while for measuring)
+            if (wait < (profile::enabled() ? 240 : 90))
                 break;
             save ("orgelwerk-fortlaufend");
             proc.pause();
