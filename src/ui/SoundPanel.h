@@ -17,6 +17,14 @@ public:
 
 private:
     void apply();
+    void chooseRoom (int r);
+    // what suits each room: reverb amount and the sound of a typical seat in it
+    struct Preset
+    {
+        float reverb;
+        OrganEngine::Acoustics acoustics;
+    };
+    static Preset presetFor (int room);
     void load();
 
     OrgelProcessor& proc;

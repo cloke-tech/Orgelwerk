@@ -24,7 +24,7 @@ SoundPanel::SoundPanel (OrgelProcessor& p) : proc (p)
     addAndMakeVisible (roomLabel);
     for (int r = 0; r < OrganEngine::numRooms(); ++r)
         room.addItem (roomName (r), r + 1);
-    room.onChange = [this] { apply(); };
+    room.onChange = [this] { chooseRoom (room.getSelectedId() - 1); };
     addAndMakeVisible (room);
 
     const std::pair<Row*, juce::String> labels[] = {
@@ -43,17 +43,35 @@ SoundPanel::SoundPanel (OrgelProcessor& p) : proc (p)
     sub.slider.setTooltip (tr ("Hebt die tiefsten Pedaltöne an (16′, 32′) und gibt ihnen Obertöne, damit man sie auch über kleine Lautsprecher spürt"));
     bass.slider.setTooltip (tr ("Grundton und Wärme; der Bass hallt länger nach"));
     reset.setButtonText (tr ("Standard"));
-    reset.onClick = [this] {
-        proc.organ.setAcoustics (OrganEngine::Acoustics {});
-        proc.organ.reverb = 0.35f;
-        load();
-        if (onChange)
-            onChange();
-    };
+    reset.onClick = [this] { chooseRoom (OrganEngine::Acoustics {}.room); };
     addAndMakeVisible (reset);
     for (auto* l : { &roomLabel, &reverb.label, &distance.label, &bass.label, &sub.label, &width.label, &treble.label })
         l->setColour (juce::Label::textColourId, theme::text);
     load();
+}
+
+SoundPanel::Preset SoundPanel::presetFor (int r)
+{
+    // reverb, then room, distance, bass, sub, width, treble. Larger rooms: more reverb, one sits
+    // further away (darker, wider), and the bass carries more. The town church is the default.
+    static const Preset presets[] = {
+        { 0.25f, { 0, 0.30f, 0.30f, 0.25f, 0.35f, 0.55f } }, // chapel: close, clear, small
+        { 0.30f, { 1, 0.40f, 0.38f, 0.30f, 0.42f, 0.48f } }, // village church
+        { 0.35f, OrganEngine::Acoustics {} },                 // town church
+        { 0.45f, { 3, 0.62f, 0.55f, 0.45f, 0.65f, 0.34f } }, // cathedral
+        { 0.55f, { 4, 0.72f, 0.62f, 0.52f, 0.78f, 0.28f } }, // minster
+    };
+    return presets[juce::jlimit (0, 4, r)];
+}
+
+void SoundPanel::chooseRoom (int r)
+{
+    const auto p = presetFor (r);
+    proc.organ.reverb = p.reverb;
+    proc.organ.setAcoustics (p.acoustics);
+    load();
+    if (onChange)
+        onChange();
 }
 
 void SoundPanel::load()

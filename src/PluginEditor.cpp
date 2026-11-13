@@ -372,6 +372,19 @@ void OrgelEditor::runScreenshot()
                 f.deleteFile();
                 juce::FileOutputStream out (f);
                 juce::PNGImageFormat().writeImageToStream (img, out);
+                // and with the minster chosen (the room's own values), then the settings put back
+                const auto keptAcoustics = proc.organ.getAcoustics();
+                const auto keptReverb = proc.organ.reverb;
+                for (auto* c : panel.getChildren())
+                    if (auto* box = dynamic_cast<juce::ComboBox*> (c))
+                        box->setSelectedId (OrganEngine::numRooms(), juce::sendNotificationSync);
+                auto img2 = panel.createComponentSnapshot (panel.getLocalBounds(), true, 2.0f);
+                juce::File f2 = juce::File (dir).getChildFile ("orgelwerk-raum-dom.png");
+                f2.deleteFile();
+                juce::FileOutputStream out2 (f2);
+                juce::PNGImageFormat().writeImageToStream (img2, out2);
+                proc.organ.setAcoustics (keptAcoustics);
+                proc.organ.reverb = keptReverb;
             }
             proc.pause();
             desk.setView (savedZoom ? MusicDesk::View::pageWidth : MusicDesk::View::pages);
